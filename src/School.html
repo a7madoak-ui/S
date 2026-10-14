@@ -1,0 +1,2348 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0A6453">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="robots" content="noindex, nofollow">
+  <title>نبض المدارس</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <?!= include('Styles') ?>
+  <style>
+  /* =========================================================================
+     School page (principal's daily form) — page-specific styles, prefix sc-
+     ======================================================================= */
+  .sc-hero { padding-bottom: 70px; }
+  .sc-hero__top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .sc-hero__top .brand { font-size: 14px; font-weight: 600; }
+  .sc-hero__top .brand__mark { width: 28px; height: 28px; border-radius: 8px; }
+  .sc-hero__top .brand__mark svg { width: 17px; height: 17px; }
+  .sc-hero__school { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; font-size: 18px; font-weight: 700; line-height: 1.5; color: #FFFFFF; overflow-wrap: anywhere; }
+  .sc-hero__school svg { width: 22px; height: 22px; margin-top: 3px; opacity: .9; }
+  .sc-hero .hero__meta button { font: inherit; cursor: pointer; transition: background-color var(--dur) ease; }
+  .sc-hero .hero__meta button:hover { background: rgba(255, 255, 255, .22); }
+  .sc-hero .hero__meta svg { width: 16px; height: 16px; opacity: .9; }
+  .sc-hero .hero__meta > span { min-width: 0; overflow-wrap: anywhere; }
+
+  .sc-main { display: flex; flex-direction: column; gap: 14px; padding-bottom: 28px; }
+  .sc-main > :first-child { margin-top: -46px; position: relative; z-index: 2; box-shadow: var(--shadow); }
+  .sc-main .alert { box-shadow: var(--shadow-sm); }
+
+  /* Date strip */
+  .card.sc-date { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px 14px; padding: 14px 16px; }
+  .sc-date__icon { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: var(--primary-50); color: var(--primary); }
+  .sc-date__icon svg { width: 24px; height: 24px; }
+  .sc-date__day { font-size: 17px; font-weight: 700; line-height: 1.45; color: var(--text); }
+  .sc-date__sub { font-size: 13.5px; line-height: 1.55; color: var(--muted); }
+  .sc-date__chip { grid-column: 1 / -1; display: flex; padding-top: 12px; border-top: 1px dashed var(--border-strong); }
+  .sc-date .chip, .sc-date .badge { white-space: normal; min-height: 30px; padding: 4px 12px; font-size: 13.5px; line-height: 1.5; }
+  .sc-date .chip svg, .sc-date .badge svg { width: 16px; height: 16px; flex: none; }
+  @media (min-width: 560px) {
+    .card.sc-date { grid-template-columns: auto minmax(0, 1fr) auto; padding: 16px 20px; }
+    .sc-date__chip { grid-column: auto; padding-top: 0; border-top: 0; justify-content: flex-end; }
+  }
+
+  /* Question cards */
+  .card.sc-q { padding: 18px 16px; }
+  .sc-q > .field { gap: 8px; }
+  .sc-qhead { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 4px; }
+  .sc-qicon { position: relative; flex: none; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; background: var(--primary-50); color: var(--primary); transition: background-color .2s ease, color .2s ease; }
+  .sc-qicon > svg { width: 20px; height: 20px; transition: opacity .2s ease, transform .25s var(--ease); }
+  .sc-qicon__ok { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; transform: scale(.6); transition: opacity .2s ease, transform .25s var(--ease); }
+  .sc-qicon__ok svg { width: 20px; height: 20px; stroke-width: 2.6; }
+  .sc-q.is-done .sc-qicon { background: var(--ok-50); color: var(--ok); }
+  .sc-q.is-done .sc-qicon > svg { opacity: 0; transform: scale(.6); }
+  .sc-q.is-done .sc-qicon__ok { opacity: 1; transform: none; }
+  .sc-qtext { flex: 1 1 auto; min-width: 0; padding-top: 6px; }
+  .field__label.sc-qtitle { font-size: 16.5px; font-weight: 700; line-height: 1.5; color: var(--text); overflow-wrap: anywhere; }
+  .sc-qtext .field__hint { margin-top: 2px; }
+  .sc-opt { display: inline-block; margin-inline-start: 8px; padding: 0 8px; border-radius: var(--radius-pill); background: var(--surface-2); color: var(--muted); font-size: 12px; font-weight: 600; line-height: 1.7; vertical-align: 2px; white-space: nowrap; }
+  .sc-q .stepper { max-width: 260px; }
+  .sc-q .field__error { margin-top: 2px; }
+  .sc-q .field__foot { min-height: 0; }
+  .sc-q .textarea { resize: none; overflow-y: hidden; }
+  .field__count[hidden] { display: none; }
+  .sc-select-native { max-width: 420px; }
+  .choice.sc-choice-sm { min-height: 50px; }
+
+  /* Lessons pair */
+  /* label / stepper / error share rows across both columns, so the steppers stay level */
+  .sc-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto auto auto; column-gap: 12px; row-gap: 6px; margin-top: 10px; }
+  .sc-pair > .field { display: contents; }
+  .sc-pair > .field:nth-child(1) > * { grid-column: 1; }
+  .sc-pair > .field:nth-child(2) > * { grid-column: 2; }
+  .sc-pair .field__label { grid-row: 1; align-self: end; font-size: 14.5px; font-weight: 600; color: var(--text-2); line-height: 1.45; }
+  .sc-pair .stepper { grid-row: 2; }
+  .sc-pair .field__error { grid-row: 3; }
+  .sc-pair .stepper { max-width: none; }
+  .sc-pair .stepper__btn { width: 46px; }
+  @media (max-width: 380px) { .sc-pair .stepper__btn { width: 40px; } .sc-pair { gap: 10px; } }
+  .sc-pair .field__error { font-size: 13px; }
+  .sc-pair-hints { margin-top: 8px; display: grid; gap: 2px; }
+  .sc-calc { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); display: grid; gap: 9px; transition: background-color .2s ease; }
+  .sc-calc__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 14px; font-size: 14px; line-height: 1.5; color: var(--text-2); }
+  .sc-calc__row b { color: var(--text); font-weight: 700; }
+  .sc-calc .progress { height: 7px; background: rgba(14, 124, 102, .12); }
+  .sc-calc.is-bad { background: var(--danger-50); }
+  .sc-calc.is-bad .sc-calc__row, .sc-calc.is-bad .sc-calc__row b { color: var(--danger-700); }
+  .sc-calc.is-bad .progress { display: none; }
+  .sc-calc__msg { display: none; font-size: 13.5px; font-weight: 600; color: var(--danger-700); }
+  .sc-calc.is-bad .sc-calc__msg { display: block; }
+
+  /* Attendance */
+  .sc-att-intro { display: flex; align-items: flex-start; gap: 6px; padding: 8px 12px; border-radius: 10px; background: var(--primary-50); color: var(--primary-700); font-size: 13.5px; line-height: 1.6; }
+  .sc-att-intro svg { width: 17px; height: 17px; margin-top: 2px; flex: none; }
+  .sc-att .att-table { margin-top: 2px; }
+  .att-table .input[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(192, 57, 43, .12); }
+  .sc-att.has-error .att-table .input:not([aria-invalid="true"]) { border-color: var(--border-strong); box-shadow: none; }
+  .sc-att.has-error .att-table .input.is-auto:not([aria-invalid="true"]) { border-color: rgba(14, 124, 102, .55); }
+  .att-table .tag[hidden] { display: none !important; }
+  @media (max-width: 479.98px) { .sc-att .att-table td[data-label] .tag { top: auto; bottom: -9px; } }
+  .sc-att-chip { font-variant-numeric: tabular-nums; }
+  .sc-att-hints { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+  .sc-att-hints li { display: flex; align-items: flex-start; gap: 6px; font-size: 13px; line-height: 1.55; color: var(--warn-700); }
+  .sc-att-hints svg { width: 15px; height: 15px; margin-top: 3px; flex: none; }
+
+  /* Photos */
+  .sc-up-zone .uploader__drop { min-height: 132px; }
+  .sc-up-zone .uploader__drop > span { display: block; }
+  .sc-add-tile { position: relative; aspect-ratio: 1 / 1; min-width: 0; display: grid; place-items: center; align-content: center; gap: 4px; border: 2px dashed #9CCBBE; border-radius: var(--radius); background: var(--surface); color: var(--primary-700); font-size: 13px; font-weight: 700; cursor: pointer; transition: background-color var(--dur) ease, border-color var(--dur) ease; }
+  .sc-add-tile:hover { background: var(--primary-50); border-color: var(--primary); }
+  .sc-add-tile:focus-within { outline: 2.5px solid var(--focus); outline-offset: 2px; }
+  .sc-add-tile svg { width: 24px; height: 24px; }
+  .sc-add-tile input[type="file"], .sc-file-btn input[type="file"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+  .sc-file-btn { position: relative; overflow: hidden; }
+  .sc-thumb-open { position: absolute; inset: 0; z-index: 1; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+  .sc-thumb-open:focus-visible { outline-offset: -3px; }
+  .thumb.sc-loading > img { opacity: 0; }
+  .thumb.sc-loading { background: linear-gradient(100deg, #ECF0F2 30%, #F6F8F9 50%, #ECF0F2 70%); background-size: 300% 100%; animation: nabd-shimmer 1.4s ease-in-out infinite; }
+  .thumb.sc-fatal::after { margin-top: -30px; }
+  .sc-thumb-err { position: absolute; inset-inline: 6px; bottom: 8px; z-index: 3; color: #FFFFFF; font-size: 12px; font-weight: 700; line-height: 1.4; text-align: center; }
+  .uploader__actions { align-items: center; justify-content: space-between; }
+  .sc-up-note { font-size: 13px; color: var(--muted); }
+  .sc-up-note.is-busy { color: var(--primary-700); font-weight: 600; }
+
+  /* Receipt */
+  .card.sc-receipt { padding: 0; overflow: hidden; }
+  .sc-receipt__head { position: relative; padding: 28px 18px 22px; text-align: center; background: radial-gradient(120% 90% at 50% 0%, rgba(30, 138, 76, .09) 0%, rgba(30, 138, 76, 0) 70%); border-bottom: 1.5px dashed var(--border-strong); }
+  .sc-receipt--returned .sc-receipt__head { background: radial-gradient(120% 90% at 50% 0%, rgba(192, 57, 43, .08) 0%, rgba(192, 57, 43, 0) 70%); }
+  .sc-receipt__head::before, .sc-receipt__head::after { content: ""; position: absolute; bottom: -11px; width: 22px; height: 22px; border-radius: 50%; background: var(--bg); border: 1px solid var(--border); }
+  .sc-receipt__head::before { left: -12px; }
+  .sc-receipt__head::after { right: -12px; }
+  .sc-check { position: relative; display: grid; place-items: center; width: 76px; height: 76px; margin: 0 auto 14px; border-radius: 50%; background: var(--ok); color: #FFFFFF; box-shadow: 0 0 0 9px var(--ok-50), 0 12px 26px -10px rgba(30, 138, 76, .7); }
+  .sc-check svg { width: 40px; height: 40px; stroke-width: 2.5; }
+  .sc-check--danger { background: var(--danger); box-shadow: 0 0 0 9px var(--danger-50), 0 12px 26px -10px rgba(192, 57, 43, .6); }
+  .sc-check.is-new::after { content: ""; position: absolute; inset: -9px; border-radius: 50%; border: 2px solid rgba(30, 138, 76, .45); animation: sc-ripple 1.1s .25s var(--ease) both; }
+  @keyframes sc-ripple { from { transform: scale(.9); opacity: 1; } to { transform: scale(1.55); opacity: 0; } }
+  .sc-receipt__title { margin: 0; font-size: 21px; font-weight: 700; line-height: 1.45; color: var(--text); }
+  .sc-receipt__title:focus { outline: none; }
+  .sc-receipt__sub { margin-top: 2px; font-size: 15px; color: var(--text-2); }
+  .sc-receipt__badges { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 12px; }
+  .sc-receipt__meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 16px; margin: 10px 0 0; font-size: 13.5px; color: var(--muted); }
+  .sc-receipt__meta b { color: var(--text-2); font-weight: 600; }
+  .sc-receipt__body { display: grid; gap: 18px; padding: 20px 16px 18px; }
+  .sc-sec-title { margin: 0 0 8px; font-size: 13px; font-weight: 700; color: var(--muted); }
+  .sc-kv { margin: 0; }
+  .sc-kv > div { display: flex; align-items: baseline; justify-content: space-between; gap: 6px 16px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .sc-kv > div:first-child { border-top: 0; padding-top: 0; }
+  .sc-kv dt { flex: none; max-width: 55%; font-size: 14px; color: var(--text-2); }
+  .sc-kv dd { margin: 0; min-width: 0; font-size: 15px; font-weight: 600; color: var(--text); text-align: end; overflow-wrap: anywhere; }
+  .sc-kv dd.is-long { flex-basis: 100%; text-align: start; font-weight: 500; white-space: pre-line; }
+  .sc-kv > div.is-block { flex-wrap: wrap; }
+  .sc-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .sc-stat { padding: 10px 6px; border-radius: 12px; background: var(--surface-2); text-align: center; }
+  .sc-stat b { display: block; font-size: 20px; font-weight: 700; line-height: 1.3; color: var(--text); font-variant-numeric: proportional-nums; }
+  .sc-stat span { font-size: 12.5px; line-height: 1.4; color: var(--muted); }
+  .sc-stat--ok b { color: var(--ok-700); }
+  .sc-att-sum .table th, .sc-att-sum .table td { padding: 9px 10px; }
+  .sc-att-sum .table tbody th { min-width: 0; }
+  .sc-receipt__foot { display: grid; gap: 10px; padding: 14px 16px 18px; border-top: 1px solid var(--border); background: #FAFBFB; }
+  .sc-receipt__foot .row { gap: 10px; }
+  .sc-receipt__foot .row > .btn { flex: 1 1 160px; }
+  .sc-receipt__note { display: flex; align-items: flex-start; justify-content: center; gap: 6px; font-size: 13.5px; color: var(--muted); text-align: center; }
+  .sc-receipt__note svg { width: 16px; height: 16px; margin-top: 3px; flex: none; }
+  .gallery > .sc-gal { padding: 0; }
+  .gallery > .sc-gal.sc-loading img { opacity: 0; }
+  .gallery > .sc-gal.sc-loading { background: linear-gradient(100deg, #ECF0F2 30%, #F6F8F9 50%, #ECF0F2 70%); background-size: 300% 100%; animation: nabd-shimmer 1.4s ease-in-out infinite; }
+  .gallery > .sc-gal.sc-broken { display: grid; place-items: center; color: var(--muted); cursor: default; }
+
+  /* Returned banners */
+  .sc-ret__note { margin-top: 4px; font-weight: 600; color: var(--danger-700); white-space: pre-line; overflow-wrap: anywhere; }
+  .sc-ret__when { margin-top: 2px; font-size: 13px; color: var(--text-2); }
+  .sc-corr-note { margin-top: 4px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 255, 255, .7); font-weight: 600; white-space: pre-line; overflow-wrap: anywhere; }
+
+  /* Picker */
+  .sc-search { position: relative; }
+  .sc-search svg { position: absolute; top: 50%; inset-inline-start: 14px; width: 20px; height: 20px; margin-top: -10px; color: var(--muted); pointer-events: none; }
+  .sc-search .input { padding-inline-start: 44px; }
+  .sc-search .input::-webkit-search-cancel-button { cursor: pointer; }
+  .sc-picklist { max-height: min(50vh, 420px); overflow-y: auto; overscroll-behavior: contain; border: 1.5px solid var(--border-strong); border-radius: 14px; background: var(--surface); }
+  .sc-pick { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 54px; padding: 10px 14px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 15.5px; font-weight: 600; line-height: 1.5; text-align: start; cursor: pointer; transition: background-color var(--dur) ease; }
+  .sc-pick + .sc-pick { border-top: 1px solid var(--border); }
+  .sc-pick:hover { background: #F7FAFA; }
+  .sc-pick:focus-visible { outline-offset: -3px; }
+  .sc-pick > svg { width: 20px; height: 20px; color: var(--primary); flex: none; }
+  .sc-pick > span { min-width: 0; overflow-wrap: anywhere; }
+  .sc-pick-empty { padding: 18px 14px; text-align: center; color: var(--muted); font-size: 14.5px; }
+  .sc-selected { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1.5px solid var(--primary); border-radius: 14px; background: var(--primary-50); }
+  .sc-selected__name { flex: 1 1 auto; min-width: 0; font-weight: 700; color: var(--primary-700); overflow-wrap: anywhere; }
+  .sc-selected > svg { width: 22px; height: 22px; color: var(--primary); flex: none; }
+  .input.sc-pin { height: 60px; direction: ltr; text-align: center; font-size: 28px; font-weight: 700; letter-spacing: .55em; padding-inline: calc(12px + .55em) 12px; }
+  .input.sc-pin::placeholder { letter-spacing: .55em; color: #C3CDD1; }
+  .sc-cont { display: flex; align-items: center; gap: 14px; }
+  .sc-cont__label { font-size: 13.5px; color: var(--muted); }
+  .sc-cont__name { font-size: 17px; font-weight: 700; line-height: 1.5; color: var(--text); overflow-wrap: anywhere; }
+  .sc-cont-icon { display: grid; place-items: center; flex: none; width: 52px; height: 52px; border-radius: 15px; background: var(--primary-50); color: var(--primary); }
+  .sc-cont-icon svg { width: 26px; height: 26px; }
+  .sc-actions { display: grid; gap: 10px; }
+
+  /* Sticky submit bar */
+  .sc-bar { position: fixed; inset-inline: 0; bottom: 0; z-index: 40; padding: 10px 16px calc(12px + env(safe-area-inset-bottom)); background: rgba(255, 255, 255, .95); -webkit-backdrop-filter: saturate(1.6) blur(14px); backdrop-filter: saturate(1.6) blur(14px); border-top: 1px solid var(--border); box-shadow: 0 -8px 24px rgba(16, 34, 43, .07); transition: transform .22s var(--ease); }
+  .sc-bar__progress { position: absolute; top: -1px; inset-inline: 0; height: 3px; background: transparent; overflow: hidden; }
+  .sc-bar__progress > span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--primary-600), #19A383); border-start-end-radius: 3px; border-end-end-radius: 3px; transition: width .35s var(--ease); }
+  .sc-bar__inner { max-width: 648px; margin-inline: auto; display: grid; gap: 7px; }
+  .sc-bar__note { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 0; font-size: 13px; line-height: 1.5; color: var(--muted); text-align: center; }
+  .sc-bar__note b { color: var(--accent-700); font-weight: 700; }
+  .sc-bar__note.is-busy { color: var(--primary-700); font-weight: 600; }
+  .sc-bar__note .spinner { width: 14px; height: 14px; border-width: 2px; }
+  body.sc-has-bar { padding-bottom: calc(118px + env(safe-area-inset-bottom)); }
+  body.sc-typing .sc-bar { transform: translateY(calc(100% + 8px)); }
+
+  /* Misc */
+  .sc-footer { padding: 6px 16px 26px; text-align: center; font-size: 12.5px; color: var(--muted); }
+  .sc-footer .brand__mark { width: 18px; height: 18px; border-radius: 5px; vertical-align: -4px; margin-inline-end: 6px; }
+  .sc-footer .brand__mark::after { display: none; }
+  .sc-footer .brand__mark svg { width: 12px; height: 12px; }
+  .sc-skel-card { padding: 18px 16px; }
+  .sc-skel-card .skeleton + .skeleton { margin-top: 10px; }
+  .card .empty { padding-block: 30px; }
+  .sc-last { margin-top: 10px; }
+  .sc-empty-hint { font-size: 13.5px !important; color: var(--text-2) !important; }
+  .sc-more { align-self: flex-start; }
+  .sc-suggest { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+  .sc-suggest__chip { border: 0; cursor: pointer; min-height: 34px; padding: 2px 12px; font-size: 13.5px; font-family: inherit; max-width: 100%; white-space: normal; text-align: start; }
+  .sc-suggest__chip:hover { background: var(--primary-100); }
+  .sc-shake { animation: sc-shake .36s ease; }
+  @keyframes sc-shake { 0%, 100% { transform: none; } 20% { transform: translateX(-6px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(3px); } }
+  .sc-flash { animation: sc-flash 1.2s ease; }
+  @keyframes sc-flash { 0% { box-shadow: 0 0 0 0 rgba(192, 57, 43, .0); } 25% { box-shadow: 0 0 0 4px rgba(192, 57, 43, .25); } 100% { box-shadow: var(--shadow-sm); } }
+  .stepper__btn { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+  @media (min-width: 768px) {
+    .card.sc-q { padding: 22px 22px; }
+    .sc-receipt__body { padding: 22px 24px 20px; }
+    .sc-receipt__foot { padding: 16px 24px 20px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .sc-check.is-new::after { display: none; } }
+  @media print { .sc-bar, .sc-footer { display: none !important; } body.sc-has-bar { padding-bottom: 0; } }
+  </style>
+</head>
+<body>
+  <div id="app" aria-live="off">
+    <noscript>
+      <div style="max-width:520px;margin:40px auto;padding:24px;font-family:Tahoma,sans-serif;text-align:center">
+        هذه الصفحة تحتاج إلى تفعيل JavaScript في المتصفح.
+      </div>
+    </noscript>
+  </div>
+  <div class="sr-only" id="sc-live" aria-live="polite" aria-atomic="true"></div>
+  <script>window.BOOT = <?!= bootJson ?>;</script>
+  <?!= include('Common') ?>
+  <script>
+  /* ===========================================================================
+     نبض المدارس — principal's page (spec §7.3)
+     Picker mode (?f=all) and form mode (?s=<token>). All dynamic text goes
+     through App.html (escaped) or textContent; events use delegation with
+     data-action attributes.
+     ========================================================================= */
+  (function () {
+    'use strict';
+    var App = window.App;
+    var doc = document;
+    var root = doc.getElementById('app');
+    if (!App || !root) return;
+    var html = App.html;
+    var icon = App.icon;
+    var BOOT = window.BOOT && typeof window.BOOT === 'object' ? window.BOOT : {};
+
+    /* ------------------------------------------------------------ constants */
+    var APP_NAME = BOOT.appName || 'نبض المدارس';
+    var ATT_ROWS = ['students', 'teachers', 'staff'];
+    var ATT_LABEL = { students: 'الطلاب', teachers: 'المعلمون', staff: 'الإداريون' };
+    var MAX_TEXT = 300;
+    var MAX_AREA = 1000;
+    var MAX_COUNT = 100000;
+    var FILLED = '__filledBy';
+    var UPLOAD_CONCURRENCY = 2;
+    var KNOWN_TYPES = { number: 1, text: 1, textarea: 1, select: 1, yesno: 1, attendance: 1, photos: 1 };
+    var TYPE_ICON = { number: 'chart', text: 'edit', textarea: 'form', select: 'list', yesno: 'check-double', attendance: 'users', photos: 'camera' };
+    var ERROR_TITLES = {
+      BAD_LINK: 'الرابط غير صالح',
+      INACTIVE: 'لا يمكن الإرسال حاليًا',
+      NOT_SETUP: 'النظام غير جاهز بعد',
+      NOT_EDITABLE: 'لا يمكن فتح هذا التقرير',
+      DISABLED: 'هذا الرابط متوقف',
+      ERROR: 'تعذّر فتح الصفحة'
+    };
+    var ERROR_ICONS = { BAD_LINK: 'link', INACTIVE: 'lock', NOT_SETUP: 'settings', NOT_EDITABLE: 'lock', DISABLED: 'link', ERROR: 'alert' };
+    var COARSE = false;
+    try { COARSE = window.matchMedia('(pointer: coarse)').matches; } catch (e) { COARSE = false; }
+
+    /* ---------------------------------------------------------------- state */
+    var S = {
+      mode: BOOT.mode === 'picker' ? 'picker' : 'form',
+      token: '',
+      form: null,
+      view: 'loading',
+      viewError: null,         // {code, error} for the full-page error view
+      picker: BOOT.picker || null,
+      pickId: '',
+      pickQuery: '',
+      pickNotice: '',
+      pickChange: false,
+      answers: {},
+      att: {},                 // attendance working copy {row:{present,absent}}
+      auto: {},                // row → present was auto-filled
+      photos: {},              // fieldId → [item]
+      filledBy: '',
+      errors: {},
+      showErrors: false,
+      dirty: false,
+      editing: false,
+      correcting: false,
+      correctionNote: '',
+      offdayOverride: false,
+      submitting: false,
+      serverError: '',
+      serverErrorRetry: false,
+      draftRestored: false,
+      justSent: false,
+      showAllReturned: false,
+      clock: { server: 0, client: Date.now() }
+    };
+    var photoUrlCache = {};    // drive file id → displayable url (blob:/data:)
+    var activeUploads = 0;
+
+    /* ---------------------------------------------------------------- utils */
+    function $(sel, el) { return (el || doc).querySelector(sel); }
+    function $$(sel, el) { return Array.prototype.slice.call((el || doc).querySelectorAll(sel)); }
+    function clone(v) { return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); }
+    function isNum(v) { return typeof v === 'number' && isFinite(v); }
+    function str(v) { return v === null || v === undefined ? '' : String(v); }
+    function digitsOnly(v) { return App.latinDigits(str(v)).replace(/[^0-9]/g, ''); }
+    function toCount(v) {
+      if (isNum(v)) return Math.round(v);
+      var d = digitsOnly(v);
+      return d === '' ? null : parseInt(d.slice(0, 7), 10);
+    }
+    function refCount(row) {
+      var s = S.form && S.form.school;
+      var n = s ? Number(s[row]) : 0;
+      return isFinite(n) && n > 0 ? Math.round(n) : 0;
+    }
+    function hhmmToMin(t) {
+      var m = /^(\d{1,2}):(\d{2})/.exec(str(t));
+      return m ? (+m[1]) * 60 + (+m[2]) : null;
+    }
+    function nowMin() { return S.clock.server + Math.floor((Date.now() - S.clock.client) / 60000); }
+    function announce(msg) {
+      var live = doc.getElementById('sc-live');
+      if (!live) return;
+      live.textContent = '';
+      setTimeout(function () { live.textContent = msg; }, 30);
+    }
+    /** Arabic counted noun: 1 → one, 2 → two, 3–10 → n few, otherwise n many. */
+    function arCount(n, one, two, few, many) {
+      if (n === 1) return one;
+      if (n === 2) return two;
+      if (n >= 3 && n <= 10) return n + ' ' + few;
+      return App.fmt.num(n) + ' ' + many;
+    }
+    function photosWord(n) { return arCount(n, 'صورة واحدة', 'صورتان', 'صور', 'صورة'); }
+    /* oblique case (after a preposition or verbal noun): «حتى صورتين», «رفع صورتين» */
+    function photosWordG(n) { return arCount(n, 'صورة واحدة', 'صورتين', 'صور', 'صورة'); }
+    function minutesWord(n) { return arCount(n, 'دقيقة واحدة', 'دقيقتين', 'دقائق', 'دقيقة'); }
+    function editsWord(n) { return arCount(n, 'مرة واحدة', 'مرتين', 'مرات', 'مرة'); }
+    function normSearch(s) {
+      return App.latinDigits(str(s)).toLowerCase()
+        .replace(/[\u064B-\u0652\u0640]/g, '')
+        .replace(/[أإآٱ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي')
+        .replace(/\s+/g, ' ').trim();
+    }
+    function dayLabel(iso) { return App.date.dayName(iso) + ' ' + App.date.hijri(iso, { withYear: false }); }
+    function tsLabel(ts, refDate) {
+      var t = App.time.fmt(ts);
+      if (!t) return '';
+      var d = str(ts).slice(0, 10);
+      if (refDate && App.date.isISO(d) && d !== refDate) return App.date.greg(d, { withYear: false }) + '، ' + t;
+      return t;
+    }
+    function storeKeyDraft() { return 'draft:' + S.token + ':' + (S.form ? S.form.date : ''); }
+    function isPreview() { return !!(S.form && S.form.preview); }
+    function fields() {
+      var f = S.form && Array.isArray(S.form.fields) ? S.form.fields : [];
+      return f.filter(function (x) { return x && typeof x.id === 'string' && KNOWN_TYPES[x.type]; });
+    }
+    function fieldById(id) {
+      var list = fields();
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+      return null;
+    }
+    function kpiField(k) {
+      var list = fields();
+      for (var i = 0; i < list.length; i++) if (list[i].kpi === k) return list[i];
+      return null;
+    }
+    function attField() {
+      var list = fields();
+      for (var i = 0; i < list.length; i++) if (list[i].type === 'attendance') return list[i];
+      return null;
+    }
+    function attRows(f) {
+      var rows = f && Array.isArray(f.rows) ? f.rows.filter(function (r) { return ATT_LABEL[r]; }) : [];
+      return rows.length ? rows : ATT_ROWS.slice();
+    }
+    function lessonsPair() {
+      var p = kpiField('lessons_planned'), d = kpiField('lessons_done');
+      return p && d && p.type === 'number' && d.type === 'number' ? { p: p, d: d } : null;
+    }
+    function maxPhotos(f) {
+      var n = Number(f && f.maxCount);
+      return isFinite(n) && n >= 1 ? Math.min(10, Math.round(n)) : 6;
+    }
+    function numBounds(f) {
+      var min = isNum(f.min) ? f.min : 0;
+      var max = isNum(f.max) ? f.max : MAX_COUNT;
+      return { min: Math.max(0, min), max: Math.min(MAX_COUNT, max) };
+    }
+    function scrollToEl(el, block) {
+      if (!el) return;
+      try { el.scrollIntoView({ behavior: 'smooth', block: block || 'center' }); } catch (e) { el.scrollIntoView(); }
+    }
+    function focusNoScroll(el) {
+      if (!el) return;
+      try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
+    }
+
+    /* =============================================================== VIEWS */
+    function heroHtml() {
+      var f = S.form;
+      var title = (f && f.systemTitle) || BOOT.systemTitle || 'متابعة سير العملية التعليمية';
+      var sup = (f && f.ok && f.supervisor) || (S.picker && S.picker.ok && S.picker.supervisor) || null;
+      var toLine = sup && (sup.title || sup.name) ? ('إلى: ' + [sup.title, sup.name].filter(Boolean).join(' ')) : '';
+      var showSchool = S.view !== 'picker' && S.view !== 'error' && f && f.ok && f.school;
+      var canChange = S.mode === 'picker' && S.view !== 'picker' && S.view !== 'error' && S.token && !isPreview();
+      return html`<header class="hero sc-hero">
+        <div class="sc-hero__top">
+          <span class="brand"><span class="brand__mark">${icon('pulse')}</span><span class="brand__name">${APP_NAME}</span></span>
+        </div>
+        <h1 class="hero__title">${title}</h1>
+        ${showSchool
+          ? html`<p class="sc-hero__school">${icon('school')}<span>${f.school.name}</span></p>`
+          : html`<p class="hero__sub">صفحة إدخال البيانات اليومية وإرسالها للمشرف</p>`}
+        ${toLine || canChange ? html`<div class="hero__meta">
+          ${toLine ? html`<span>${icon('user')}<span>${toLine}</span></span>` : ''}
+          ${canChange ? html`<button type="button" data-action="change-school">${icon('refresh')}<span>تغيير المدرسة</span></button>` : ''}
+        </div>` : ''}
+      </header>`;
+    }
+
+    function footerHtml() {
+      return html`<footer class="sc-footer"><span class="brand__mark" aria-hidden="true">${icon('pulse')}</span>${APP_NAME} • بياناتك تُرسل مباشرة إلى المشرف</footer>`;
+    }
+
+    function skeletonHtml() {
+      return html`<section class="card sc-skel-card" aria-busy="true" aria-label="جارٍ التحميل">
+          <span class="skeleton skeleton--title"></span><span class="skeleton skeleton--text"></span>
+        </section>
+        <section class="card sc-skel-card"><span class="skeleton skeleton--title"></span><span class="skeleton skeleton--block"></span></section>
+        <section class="card sc-skel-card"><span class="skeleton skeleton--title"></span><span class="skeleton skeleton--block"></span></section>`;
+    }
+
+    function errorHtml(err) {
+      var code = err && ERROR_TITLES[err.code] ? err.code : 'ERROR';
+      var msg = (err && err.error) || 'حدث خطأ غير متوقع. حاول مرة أخرى بعد قليل.';
+      var network = err && err.network;
+      var tone = code === 'BAD_LINK' || code === 'ERROR' ? 'empty--danger' : 'empty--warn';
+      return html`<section class="card" role="alert">
+        <div class="empty ${tone}">
+          ${icon(network ? 'wifi-off' : ERROR_ICONS[code])}
+          <h2>${network ? 'تعذّر الاتصال' : ERROR_TITLES[code]}</h2>
+          <p>${msg}</p>
+          ${code === 'BAD_LINK' ? html`<p class="sc-empty-hint">تأكد أنك فتحت آخر رابط أرسله لك المشرف</p>` : ''}
+          ${code === 'INACTIVE' ? html`<p class="sc-empty-hint">للاستفسار تواصل مع المشرف.</p>` : ''}
+          ${code === 'DISABLED' ? html`<p class="sc-empty-hint">تجد رابط مدرستك الخاص في رسالة المشرف إليك.</p>` : ''}
+          ${code === 'ERROR' && S.token ? html`<button type="button" class="btn btn-secondary" data-action="retry-load">${icon('refresh')}<span>إعادة المحاولة</span></button>` : ''}
+          ${code === 'ERROR' && !S.token ? html`<p class="sc-empty-hint">حدّث الصفحة بعد قليل، وإذا تكرر الأمر تواصل مع المشرف.</p>` : ''}
+        </div>
+      </section>`;
+    }
+
+    /* ---------------------------------------------------------- picker view */
+    function pickerHtml() {
+      var p = S.picker;
+      if (!p || !p.ok) return errorHtml(p || { code: 'ERROR' });
+      var stored = App.store.get('school', null);
+      if (stored && stored.token && !S.pickChange) {
+        return html`<section class="card"><div class="card__body stack">
+          <div class="sc-cont">
+            <span class="sc-cont-icon" aria-hidden="true">${icon('school')}</span>
+            <div><p class="sc-cont__label">متابعة باسم:</p><p class="sc-cont__name">${stored.schoolName || 'مدرستك'}</p></div>
+          </div>
+          <div class="sc-actions">
+            <button type="button" class="btn btn-primary btn-lg btn-block" data-action="continue">${icon('chevron-left')}<span>متابعة</span></button>
+            <button type="button" class="btn btn-secondary btn-block" data-action="pick-other">${icon('refresh')}<span>تغيير المدرسة</span></button>
+          </div>
+        </div></section>`;
+      }
+      var schools = Array.isArray(p.schools) ? p.schools : [];
+      var sel = schools.filter(function (s) { return s.id === S.pickId; })[0] || null;
+      var notice = S.pickNotice ? html`<div class="alert alert--warn">${icon('info')}<div>${S.pickNotice}</div></div>` : '';
+      if (!schools.length) {
+        return html`${notice}<section class="card"><div class="empty">${icon('school')}<h2>لا توجد مدارس بعد</h2><p>لم يُضف المشرف أي مدرسة حتى الآن. تواصل مع المشرف.</p></div></section>`;
+      }
+      var listPart;
+      if (sel) {
+        listPart = html`<div class="sc-selected">
+          ${icon('check')}
+          <span class="sc-selected__name">${sel.name}</span>
+          <button type="button" class="btn btn-ghost btn-sm" data-action="pick-clear">تغيير</button>
+        </div>`;
+      } else {
+        listPart = html`${schools.length > 6 ? html`<div class="sc-search">${icon('search')}
+            <input class="input" type="search" id="sc-search" data-kind="search" placeholder="ابحث عن اسم مدرستك…" aria-label="ابحث عن مدرستك" autocomplete="off" enterkeyhint="search" value="${S.pickQuery}">
+          </div>` : ''}
+          <div class="sc-picklist" id="sc-picklist" role="group" aria-label="قائمة المدارس">${pickListItems(schools)}</div>`;
+      }
+      return html`${notice}<section class="card">
+        <div class="card__head">${icon('school')}<h2 class="card__title">اختر مدرستك</h2></div>
+        <div class="card__body stack">
+          ${listPart}
+          <div class="field" id="pin-field">
+            <label class="field__label" for="sc-pin">رمز المدرسة</label>
+            <input class="input sc-pin" id="sc-pin" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" enterkeyhint="go" data-kind="pin" placeholder="••••" aria-describedby="pin-hint pin-err">
+            <p class="field__hint" id="pin-hint">رمز المدرسة يرسله لك المشرف مرة واحدة</p>
+            <p class="field__error" id="pin-err" aria-live="polite">${icon('alert')}<span></span></p>
+          </div>
+          <button type="button" class="btn btn-primary btn-lg btn-block" id="sc-enter" data-action="enter">${icon('lock')}<span>دخول</span></button>
+          ${stored && stored.token && S.pickChange ? html`<button type="button" class="btn btn-ghost btn-block" data-action="pick-back">${icon('chevron-right')}<span>العودة إلى ${stored.schoolName || 'مدرستي السابقة'}</span></button>` : ''}
+        </div>
+      </section>`;
+    }
+    function pickListItems(schools) {
+      var q = normSearch(S.pickQuery);
+      var list = schools.filter(function (s) { return !q || normSearch(s.name).indexOf(q) >= 0; });
+      if (!list.length) return html`<div class="sc-pick-empty">لا توجد مدرسة بهذا الاسم. جرّب كلمة أخرى.</div>`;
+      return list.map(function (s) {
+        return html`<button type="button" class="sc-pick" data-action="pick" data-id="${s.id}">${icon('school')}<span>${s.name}</span></button>`;
+      });
+    }
+
+    /* ------------------------------------------------------- date strip */
+    function deadlineChipHtml() {
+      var f = S.form;
+      var dl = App.time.fmt(f.deadline);
+      if (S.correcting && f.state === 'correction') return html`<span class="chip chip--warn">${icon('undo')}<span>تصحيح تقرير سابق</span></span>`;
+      if (f.existing && !S.editing && !isPreview()) return App.status.badge(f.existing.status);
+      if (S.editing && f.existing) {
+        if (f.existing.status === 'returned') return html`<span class="chip chip--warn">${icon('undo')}<span>تصحيح التقرير</span></span>`;
+        return html`<span class="chip chip--info">${icon('edit')}<span>تعديل تقرير مُرسل</span></span>`;
+      }
+      if ((!f.isWorkday || f.isHoliday) && !isPreview() && !S.offdayOverride) {
+        return html`<span class="chip">${icon('calendar')}<span>${f.isHoliday ? 'يوم إجازة' : 'ليس يوم دوام'}</span></span>`;
+      }
+      if (f.state === 'closed') return html`<span class="chip chip--danger">${icon('lock')}<span>انتهى وقت الإرسال</span></span>`;
+      var dlMin = hhmmToMin(f.deadline);
+      var past = f.state === 'late' || (dlMin !== null && nowMin() > dlMin);
+      if (past) return html`<span class="chip chip--warn" id="sc-dl">${icon('alert')}<span>تجاوزت الموعد — سيُسجَّل التقرير متأخرًا</span></span>`;
+      var left = dlMin !== null ? dlMin - nowMin() : null;
+      var soon = left !== null && left >= 0 && left <= 60 ? ' • بعد ' + (left < 1 ? 'أقل من دقيقة' : minutesWord(left)) : '';
+      return html`<span class="chip chip--info" id="sc-dl">${icon('clock')}<span>آخر موعد للإرسال ${dl}${soon}</span></span>`;
+    }
+    function dateCardHtml() {
+      var d = S.form.date;
+      return html`<section class="card sc-date" aria-label="تاريخ التقرير">
+        <span class="sc-date__icon" aria-hidden="true">${icon('calendar')}</span>
+        <div>
+          <div class="sc-date__day">${App.date.dayName(d)} <span class="fw-500">${App.date.hijri(d)}</span></div>
+          <div class="sc-date__sub">${App.date.greg(d)}${S.form.state === 'correction' ? ' • تقرير يوم سابق' : ''}</div>
+        </div>
+        <div class="sc-date__chip" id="sc-chip">${deadlineChipHtml()}</div>
+      </section>`;
+    }
+
+    /* ----------------------------------------------------- returned banners */
+    function returnedBannersHtml() {
+      var f = S.form;
+      if (!f || !Array.isArray(f.returned) || !f.returned.length || S.correcting || isPreview()) return '';
+      var list = f.returned.filter(function (r) { return r && App.date.isISO(r.date); });
+      var shown = S.showAllReturned ? list : list.slice(0, 2);
+      var items = shown.map(function (r) {
+        return html`<div class="alert alert--danger" data-returned="${r.date}">
+          ${icon('undo')}
+          <div>
+            <strong class="alert__title">أعاد المشرف تقرير يوم ${dayLabel(r.date)} للتصحيح:</strong>
+            <p class="sc-ret__when">${App.date.greg(r.date)}${r.date === f.today ? ' (اليوم)' : ''}</p>
+            <p class="sc-ret__note">«${r.reviewNote || 'يرجى مراجعة التقرير وتصحيحه'}»</p>
+            <div class="alert__actions">
+              <button type="button" class="btn btn-danger btn-sm" data-action="correct" data-date="${r.date}">${icon('edit')}<span>تصحيح التقرير</span></button>
+            </div>
+          </div>
+        </div>`;
+      });
+      var more = list.length > shown.length
+        ? html`<button type="button" class="btn btn-ghost btn-sm sc-more" data-action="more-returned">${icon('chevron-down')}<span>عرض باقي التقارير المعادة (${list.length - shown.length})</span></button>`
+        : '';
+      return html`${items}${more}`;
+    }
+
+    function topAlertsHtml() {
+      var out = [];
+      if (isPreview()) {
+        out.push(html`<div class="alert alert--info">${icon('eye')}<div><strong class="alert__title">وضع المعاينة — لن يتم إرسال أي بيانات</strong>
+          <span class="text-sm">هكذا تظهر الصفحة لمدير المدرسة. يمكنك تجربة التعبئة، أما الإرسال ورفع الصور فمعطّلان.</span></div></div>`);
+      }
+      if (S.serverError) out.push(serverErrorHtml());
+      return out;
+    }
+    function serverErrorHtml() {
+      return html`<div class="alert alert--danger" id="sc-server-error" role="alert">${icon('alert')}<div>
+        <strong class="alert__title">لم يُرسل التقرير</strong><span>${S.serverError}</span>
+        ${S.serverErrorRetry ? html`<p class="text-sm text-2 mt-1">ما كتبته محفوظ على هذا الجهاز ولن يضيع.</p>` : ''}
+        <div class="alert__actions">
+          ${S.serverErrorRetry ? html`<button type="button" class="btn btn-danger btn-sm" data-action="submit">${icon('refresh')}<span>إعادة المحاولة</span></button>` : ''}
+          <button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-error">إخفاء</button>
+        </div>
+      </div></div>`;
+    }
+
+    /* ============================================================ FORM VIEW */
+    function optTag(f) { return f.required ? '' : html`<span class="sc-opt">اختياري</span>`; }
+    function errEl(id) { return html`<p class="field__error" id="er-${id}" aria-live="polite">${icon('alert')}<span></span></p>`; }
+    function qHead(o) {
+      var label = o.labelFor
+        ? html`<label class="field__label sc-qtitle" id="lb-${o.id}" for="${o.labelFor}">${o.title}${o.opt || ''}</label>`
+        : html`<span class="field__label sc-qtitle" id="lb-${o.id}">${o.title}${o.opt || ''}</span>`;
+      return html`<div class="sc-qhead">
+        <span class="sc-qicon" aria-hidden="true">${icon(o.icon)}<span class="sc-qicon__ok">${icon('check')}</span></span>
+        <div class="sc-qtext">${label}${o.help ? html`<p class="field__hint" id="hp-${o.id}">${o.help}</p>` : ''}</div>
+      </div>`;
+    }
+    function describedBy(f) { return 'er-' + f.id + (f.help ? ' hp-' + f.id : ''); }
+
+    function stepperHtml(f, ariaLabelledby) {
+      var v = S.answers[f.id];
+      return html`<div class="stepper">
+        <button type="button" class="stepper__btn" tabindex="-1" data-action="step" data-step="-1" data-fid="${f.id}" aria-label="إنقاص ${f.label}">${icon('minus')}</button>
+        <input class="stepper__input" id="in-${f.id}" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" enterkeyhint="next"
+          data-kind="num" data-fid="${f.id}" data-nav value="${isNum(v) ? String(v) : ''}"
+          aria-labelledby="${ariaLabelledby}" aria-describedby="${describedBy(f)}">
+        <button type="button" class="stepper__btn" tabindex="-1" data-action="step" data-step="1" data-fid="${f.id}" aria-label="زيادة ${f.label}">${icon('plus')}</button>
+      </div>`;
+    }
+
+    function choiceGroupHtml(f, options) {
+      var cur = S.answers[f.id];
+      if (options.length > 8) {
+        return html`<select class="select sc-select-native" id="in-${f.id}" data-kind="select" data-fid="${f.id}" aria-labelledby="lb-${f.id}" aria-describedby="${describedBy(f)}">
+          <option value="">— اختر —</option>
+          ${options.map(function (o, i) { return html`<option value="${i}"${o.value === cur ? App.raw(' selected') : ''}>${o.label}</option>`; })}
+        </select>`;
+      }
+      return html`<div class="choice-group" role="radiogroup" aria-labelledby="lb-${f.id}" aria-describedby="${describedBy(f)}">
+        ${options.map(function (o, i) {
+          var on = o.value === cur;
+          return html`<button type="button" class="choice${options.length > 4 ? ' sc-choice-sm' : ''}" role="radio" aria-checked="${on ? 'true' : 'false'}" data-action="choose" data-fid="${f.id}" data-index="${i}">${o.label}</button>`;
+        })}
+      </div>`;
+    }
+    function optionsOf(f) {
+      if (f.type === 'yesno') return [{ label: 'نعم', value: true }, { label: 'لا', value: false }];
+      return (Array.isArray(f.options) ? f.options : []).map(function (o) { return { label: str(o), value: str(o) }; });
+    }
+
+    function attendanceHtml(f) {
+      var rows = attRows(f);
+      var hasRef = rows.some(function (r) { return refCount(r) > 0; });
+      return html`${hasRef ? html`<p class="sc-att-intro">${icon('sparkle')}<span>اكتب عدد <b>الغائبين</b>، ويُحسب عدد الحاضرين تلقائيًا من العدد المسجّل للمدرسة. يمكنك تعديله.</span></p>` : ''}
+        <table class="att-table">
+          <thead><tr><th scope="col">الفئة</th><th scope="col">الحاضرون</th><th scope="col">الغائبون</th></tr></thead>
+          <tbody>${rows.map(function (r) {
+            var c = S.att[r] || {};
+            return html`<tr data-row="${r}">
+              <th scope="row"><span>${ATT_LABEL[r]}</span><span class="chip chip--primary sc-att-chip" data-chip="${r}" hidden></span></th>
+              <td data-label="الحاضرون"><input class="input${S.auto[r] ? ' is-auto' : ''}" id="att-${r}-present" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" enterkeyhint="next"
+                data-kind="att" data-row="${r}" data-part="present" data-nav value="${isNum(c.present) ? String(c.present) : ''}" aria-label="${ATT_LABEL[r]} — الحاضرون" aria-describedby="er-${f.id}"><span class="tag" data-tag="${r}"${S.auto[r] ? '' : App.raw(' hidden')}>تلقائي</span></td>
+              <td data-label="الغائبون"><input class="input" id="att-${r}-absent" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" enterkeyhint="next"
+                data-kind="att" data-row="${r}" data-part="absent" data-nav value="${isNum(c.absent) ? String(c.absent) : ''}" aria-label="${ATT_LABEL[r]} — الغائبون" aria-describedby="er-${f.id}"></td>
+            </tr>`;
+          })}</tbody>
+        </table>
+        <ul class="sc-att-hints" id="att-hints">${rows.map(function (r) {
+          return html`<li data-hint="${r}" hidden>${icon('info')}<span></span></li>`;
+        })}</ul>`;
+    }
+
+    function textHtml(f) {
+      var v = str(S.answers[f.id]);
+      var area = f.type === 'textarea';
+      var max = area ? MAX_AREA : MAX_TEXT;
+      var control = area
+        ? html`<textarea class="textarea" id="in-${f.id}" rows="3" maxlength="${max}" data-kind="text" data-fid="${f.id}" aria-labelledby="lb-${f.id}" aria-describedby="${describedBy(f)} ct-${f.id}" placeholder="اكتب هنا…">${v}</textarea>`
+        : html`<input class="input" id="in-${f.id}" type="text" maxlength="${max}" autocomplete="off" enterkeyhint="next" data-kind="text" data-fid="${f.id}" data-nav value="${v}" aria-labelledby="lb-${f.id}" aria-describedby="${describedBy(f)} ct-${f.id}">`;
+      return html`${control}<div class="field__foot"><span></span><span class="field__count" id="ct-${f.id}" hidden></span></div>`;
+    }
+
+    function fieldSectionHtml(f) {
+      var labelFor = f.type === 'number' || f.type === 'text' || f.type === 'textarea' ? 'in-' + f.id : '';
+      var ic = f.kpi === 'mode' ? 'grid' : (f.kpi === 'late_students' ? 'clock' : TYPE_ICON[f.type]);
+      var body;
+      if (f.type === 'number') body = stepperHtml(f, 'lb-' + f.id);
+      else if (f.type === 'select' || f.type === 'yesno') body = choiceGroupHtml(f, optionsOf(f));
+      else if (f.type === 'attendance') body = attendanceHtml(f);
+      else if (f.type === 'photos') body = html`<div class="uploader" id="up-${f.id}" data-fid="${f.id}">${uploaderInner(f)}</div>`;
+      else body = textHtml(f);
+      return html`<section class="card sc-q" id="q-${f.id}" data-q="${f.id}">
+        <div class="field${f.type === 'attendance' ? ' sc-att' : ''}" data-fid="${f.id}">
+          ${qHead({ id: f.id, icon: ic, title: f.label, opt: optTag(f), help: f.help, labelFor: labelFor })}
+          ${body}
+          ${errEl(f.id)}
+        </div>
+      </section>`;
+    }
+
+    function lessonsSectionHtml(pair) {
+      var both = [pair.p, pair.d];
+      var anyOpt = !pair.p.required && !pair.d.required;
+      return html`<section class="card sc-q" id="q-lessons" data-q="lessons">
+        ${qHead({ id: 'lessons', icon: 'book', title: 'تفعيل الحصص الدراسية', opt: anyOpt ? html`<span class="sc-opt">اختياري</span>` : '' })}
+        <div class="sc-pair">
+          ${both.map(function (f) {
+            return html`<div class="field" data-fid="${f.id}">
+              <label class="field__label" id="lb-${f.id}" for="in-${f.id}">${f.label}${pair.p.required !== pair.d.required ? optTag(f) : ''}</label>
+              ${stepperHtml(f, 'lb-' + f.id)}
+              ${errEl(f.id)}
+            </div>`;
+          })}
+        </div>
+        ${lastPlannedHtml(pair)}
+        ${both.some(function (f) { return f.help; }) ? html`<div class="sc-pair-hints">${both.map(function (f) {
+          return f.help ? html`<p class="field__hint" id="hp-${f.id}">${f.help}</p>` : '';
+        })}</div>` : ''}
+        <div class="sc-calc" id="sc-calc" aria-live="polite">
+          <div class="sc-calc__row"><span>غير المفعّلة: <b id="calc-not">—</b></span><span>نسبة التفعيل: <b id="calc-pct">—</b></span></div>
+          <div class="progress"><div class="progress__bar" id="calc-bar"></div></div>
+          <p class="sc-calc__msg">عدد الحصص المفعّلة لا يمكن أن يتجاوز عدد الحصص المخطط لها</p>
+        </div>
+      </section>`;
+    }
+
+    /** «من آخر تقرير» — the planned-lessons count rarely changes, offer it as a one-tap suggestion. */
+    function lastPlannedHtml(pair) {
+      if (S.form.existing || isPreview() || isNum(S.answers[pair.p.id])) return '';
+      var last = App.store.get('last:' + S.token, null);
+      var n = last && isNum(last.planned) ? last.planned : null;
+      if (n === null) return '';
+      return html`<div class="sc-suggest sc-last" id="sc-last"><span class="text-sm text-muted">من آخر تقرير:</span>
+        <button type="button" class="chip chip--primary sc-suggest__chip" data-action="use-last" data-fid="${pair.p.id}" data-value="${n}" aria-label="استخدام ${pair.p.label} ${n}">${icon('refresh')}<span>${pair.p.label}: ${App.fmt.num(n)}</span></button></div>`;
+    }
+    function filledBySectionHtml() {
+      var principal = S.form.school && S.form.school.principal ? str(S.form.school.principal).trim() : '';
+      var suggest = principal && principal !== S.filledBy.trim()
+        ? html`<div class="sc-suggest"><span class="text-sm text-muted">اقتراح:</span><button type="button" class="chip chip--primary sc-suggest__chip" data-action="use-principal" aria-label="استخدام اسم ${principal}">${icon('user')}<span>${principal}</span></button></div>`
+        : '';
+      return html`<section class="card sc-q" id="q-${FILLED}" data-q="${FILLED}">
+        <div class="field" data-fid="${FILLED}">
+          ${qHead({ id: FILLED, icon: 'user', title: 'اسم من يعبّئ التقرير', labelFor: 'in-filledBy', help: 'يُحفظ الاسم على هذا الجهاز لتوفير الوقت في المرات القادمة.' })}
+          <input class="input" id="in-filledBy" type="text" maxlength="80" autocomplete="name" enterkeyhint="done" data-kind="filledBy" data-nav
+            value="${S.filledBy}" placeholder="مثال: أ. خالد العتيبي" aria-describedby="er-${FILLED} hp-${FILLED}">
+          <div id="sc-suggest">${suggest}</div>
+          ${errEl(FILLED)}
+        </div>
+      </section>`;
+    }
+
+    function formNoticeHtml() {
+      var f = S.form;
+      if (S.correcting) {
+        var note = S.correctionNote || (f.existing && f.existing.reviewNote) || '';
+        return html`<div class="alert alert--warn" id="sc-corr">${icon('undo')}<div>
+          <strong class="alert__title">تصحيح تقرير يوم ${dayLabel(f.date)}</strong>
+          <span class="text-sm">ملاحظة المشرف:</span>
+          <p class="sc-corr-note">«${note || 'يرجى مراجعة التقرير وتصحيحه'}»</p>
+          <p class="text-sm mt-2">عدّل ما يلزم ثم اضغط «إرسال التصحيح» في الأسفل.</p>
+          <div class="alert__actions"><button type="button" class="btn btn-secondary btn-sm" data-action="cancel-edit">${icon('chevron-right')}<span>${f.state === 'correction' ? 'العودة إلى تقرير اليوم' : 'إلغاء'}</span></button></div>
+        </div></div>`;
+      }
+      if (S.editing && f.existing) {
+        return html`<div class="alert alert--info">${icon('edit')}<div>
+          <strong class="alert__title">أنت تعدّل تقريرًا مُرسلًا</strong>
+          <span class="text-sm">بعد الإرسال يصل التعديل إلى المشرف${f.reviewEnabled ? ' بحالة «بانتظار المراجعة»' : ''}.</span>
+          <div class="alert__actions"><button type="button" class="btn btn-secondary btn-sm" data-action="cancel-edit">${icon('x')}<span>إلغاء التعديل</span></button></div>
+        </div></div>`;
+      }
+      if (S.draftRestored) {
+        return html`<div class="alert alert--info" id="sc-draft-note">${icon('refresh')}<div>
+          <strong class="alert__title">استعدنا ما كتبته سابقًا</strong>
+          <span class="text-sm">بياناتك محفوظة على هذا الجهاز حتى ترسل التقرير.</span>
+          <div class="alert__actions"><button type="button" class="btn btn-ghost btn-sm" data-action="draft-reset">${icon('trash')}<span>البدء من جديد</span></button></div>
+        </div></div>`;
+      }
+      return '';
+    }
+
+    function formViewHtml() {
+      var list = fields();
+      if (!list.length) {
+        return html`<section class="card"><div class="empty">${icon('form')}<h2>النموذج غير جاهز</h2><p>لم يُجهّز المشرف أسئلة التقرير بعد. تواصل مع المشرف.</p></div></section>`;
+      }
+      var pair = lessonsPair();
+      var pairDone = false;
+      var sections = [];
+      list.forEach(function (f) {
+        if (pair && (f === pair.p || f === pair.d)) {
+          if (!pairDone) { sections.push(lessonsSectionHtml(pair)); pairDone = true; }
+          return;
+        }
+        sections.push(fieldSectionHtml(f));
+      });
+      sections.push(filledBySectionHtml());
+      return html`${formNoticeHtml()}<div class="sc-form stack" id="sc-form">${sections}</div>`;
+    }
+
+    function barHtml() {
+      return html`<div class="sc-bar" id="sc-bar">
+        <div class="sc-bar__progress" aria-hidden="true"><span id="sc-progress"></span></div>
+        <div class="sc-bar__inner">
+          <p class="sc-bar__note" id="sc-bar-note"></p>
+          <button type="button" class="btn btn-primary btn-lg btn-block" id="sc-submit" data-action="submit">${icon('send')}<span>${submitLabel()}</span></button>
+        </div>
+      </div>`;
+    }
+    function submitLabel() {
+      if (S.correcting) return 'إرسال التصحيح';
+      if (S.editing && S.form.existing) return 'إرسال التعديل';
+      return 'إرسال التقرير';
+    }
+
+    function closedHtml() {
+      return html`<section class="card"><div class="empty empty--warn">
+        ${icon('clock')}
+        <h2>انتهى وقت الإرسال لهذا اليوم</h2>
+        <p>كان آخر موعد لإرسال التقرير ${App.time.fmt(S.form.deadline)}. إذا احتجت إلى إرسال التقرير فتواصل مع المشرف.</p>
+      </div></section>`;
+    }
+    function offdayHtml() {
+      var f = S.form;
+      return html`<section class="card"><div class="empty">
+        ${icon('calendar')}
+        <h2>${f.isHoliday ? 'اليوم إجازة' : 'اليوم ليس من أيام الدوام'}</h2>
+        <p>لا يلزم إرسال تقرير المتابعة اليوم. نراك في يوم الدوام القادم.</p>
+        <button type="button" class="btn btn-secondary" data-action="offday-fill">${icon('form')}<span>إرسال تقرير على أي حال</span></button>
+      </div></section>`;
+    }
+
+    /* ========================================================= RECEIPT VIEW */
+    function fmtAnswer(f, v) {
+      if (v === null || v === undefined || v === '') return '';
+      if (f.type === 'yesno') return v === true ? 'نعم' : (v === false ? 'لا' : '');
+      if (f.type === 'number') return isNum(v) ? App.fmt.num(v) : str(v);
+      return str(v);
+    }
+    function receiptSummaryHtml(r) {
+      var a = r.answers || {};
+      var d = r.derived || {};
+      var parts = [];
+      var kv = [];
+      var pair = lessonsPair();
+      var pairShown = false;
+      var flushKv = function () {
+        if (kv.length) { parts.push(html`<dl class="sc-kv">${kv}</dl>`); kv = []; }
+      };
+      fields().forEach(function (f) {
+        if (pair && (f === pair.p || f === pair.d)) {
+          if (pairShown) return;
+          pairShown = true;
+          flushKv();
+          var L = d.lessons || {};
+          var planned = isNum(L.planned) ? L.planned : a[pair.p.id];
+          var done = isNum(L.done) ? L.done : a[pair.d.id];
+          if (!isNum(planned) && !isNum(done)) return;
+          var pct = isNum(L.activationPct) ? L.activationPct : (isNum(planned) && planned > 0 && isNum(done) ? Math.round(done / planned * 1000) / 10 : null);
+          parts.push(html`<div><h3 class="sc-sec-title">تفعيل الحصص الدراسية</h3><div class="sc-stats">
+            <div class="sc-stat"><b class="num">${App.fmt.num(planned)}</b><span>المخطط لها</span></div>
+            <div class="sc-stat"><b class="num">${App.fmt.num(done)}</b><span>المفعّلة</span></div>
+            <div class="sc-stat sc-stat--ok"><b class="num">${App.fmt.pct(pct)}</b><span>نسبة التفعيل</span></div>
+          </div></div>`);
+          return;
+        }
+        var v = a[f.id];
+        if (f.type === 'attendance') {
+          var att = d.attendance || {};
+          var rows = attRows(f).filter(function (rr) { return att[rr] || (v && v[rr]); });
+          if (!rows.length) return;
+          flushKv();
+          parts.push(html`<div class="sc-att-sum"><h3 class="sc-sec-title">${f.label}</h3><div class="table-wrap"><table class="table">
+            <thead><tr><th scope="col">الفئة</th><th scope="col" class="num">الحاضرون</th><th scope="col" class="num">الغائبون</th><th scope="col" class="num">نسبة الغياب</th></tr></thead>
+            <tbody>${rows.map(function (rr) {
+              var c = att[rr] || (v && v[rr]) || {};
+              var total = (c.present || 0) + (c.absent || 0);
+              var pct = isNum(c.absencePct) ? c.absencePct : (total > 0 ? Math.round(c.absent / total * 1000) / 10 : null);
+              return html`<tr><th scope="row">${ATT_LABEL[rr]}</th><td class="num">${App.fmt.num(c.present)}</td><td class="num">${App.fmt.num(c.absent)}</td><td class="num">${App.fmt.pct(pct)}</td></tr>`;
+            })}</tbody></table></div></div>`);
+          return;
+        }
+        if (f.type === 'photos') {
+          var ph = Array.isArray(v) ? v : [];
+          if (!ph.length) return;
+          flushKv();
+          parts.push(html`<div><h3 class="sc-sec-title">${f.label} (${photosWord(ph.length)})</h3><div class="gallery">${ph.map(function (p, i) {
+            return html`<button type="button" class="sc-gal sc-loading" data-action="view-photo" data-id="${p.id}" aria-label="عرض الصورة ${i + 1}"><img alt="" data-photo-id="${p.id}"></button>`;
+          })}</div></div>`);
+          return;
+        }
+        var text = fmtAnswer(f, v);
+        if (!text) return;
+        var long = f.type === 'textarea' || text.length > 40;
+        var userText = f.type === 'text' || f.type === 'textarea' || f.type === 'select';
+        kv.push(html`<div class="${long ? 'is-block' : ''}"><dt>${f.label}</dt><dd class="${long ? 'is-long' : ''}"${userText ? App.raw(' dir="auto"') : ''}>${text}</dd></div>`);
+      });
+      flushKv();
+      if (!parts.length) parts.push(html`<p class="text-muted text-center">لا توجد بيانات في هذا التقرير.</p>`);
+      return parts;
+    }
+
+    function receiptHtml() {
+      var f = S.form;
+      var r = f.existing;
+      var st = r.status;
+      var autoApproved = st === 'approved' && !r.reviewedAt && !f.reviewEnabled;
+      var head;
+      if (st === 'returned') {
+        head = html`<div class="sc-check sc-check--danger">${icon('undo')}</div>
+          <h2 class="sc-receipt__title" id="sc-receipt-title" tabindex="-1">أعاد المشرف التقرير للتصحيح</h2>
+          <p class="sc-receipt__sub">راجع ملاحظة المشرف أعلاه ثم اضغط «تصحيح التقرير».</p>`;
+      } else if (st === 'approved' && !autoApproved) {
+        head = html`<div class="sc-check${S.justSent ? ' anim-pop is-new' : ''}">${icon('check-double')}</div>
+          <h2 class="sc-receipt__title" id="sc-receipt-title" tabindex="-1">تم اعتماد التقرير ✓</h2>
+          <p class="sc-receipt__sub">اعتمد المشرف تقرير هذا اليوم. شكرًا لك.</p>`;
+      } else {
+        head = html`<div class="sc-check${S.justSent ? ' anim-pop is-new' : ''}">${icon('check')}</div>
+          <h2 class="sc-receipt__title" id="sc-receipt-title" tabindex="-1">تم إرسال التقرير ✓</h2>
+          <p class="sc-receipt__sub">${autoApproved ? 'وصل التقرير إلى المشرف.' : 'بانتظار مراجعة المشرف'}</p>`;
+      }
+      var badges = [];
+      if (r.late) badges.push(html`<span class="badge badge--warn">${icon('clock')}<span>متأخر</span></span>`);
+      if (r.edits > 0) badges.push(html`<span class="badge">${icon('edit')}<span>عُدِّل ${editsWord(r.edits)}</span></span>`);
+      var meta = [];
+      if (r.submittedAt) meta.push(html`<span>وقت الإرسال: <b class="num">${tsLabel(r.submittedAt, f.date)}</b></span>`);
+      if (r.updatedAt && r.updatedAt !== r.submittedAt) meta.push(html`<span>آخر تعديل: <b class="num">${tsLabel(r.updatedAt, f.date)}</b></span>`);
+      if (st === 'approved' && r.reviewedAt) meta.push(html`<span>وقت الاعتماد: <b class="num">${tsLabel(r.reviewedAt, f.date)}</b></span>`);
+      if (r.filledBy) meta.push(html`<span>المعبّئ: <b><bdi>${r.filledBy}</bdi></b></span>`);
+
+      var actions = [];
+      var note = '';
+      var pastCorrection = f.state === 'correction';
+      if (st !== 'returned') {
+        if (f.canEdit && !pastCorrection) actions.push(html`<button type="button" class="btn btn-secondary" data-action="edit">${icon('edit')}<span>تعديل التقرير</span></button>`);
+        actions.push(html`<button type="button" class="btn btn-ghost" data-action="copy-receipt">${icon('copy')}<span>نسخ الإيصال</span></button>`);
+        if (pastCorrection) {
+          actions.unshift(html`<button type="button" class="btn btn-primary" data-action="back-today">${icon('chevron-right')}<span>العودة إلى تقرير اليوم</span></button>`);
+        }
+        if (st === 'approved' && !autoApproved) note = html`<p class="sc-receipt__note">${icon('lock')}<span>لا يمكن تعديل التقرير بعد اعتماده.</span></p>`;
+        else if (f.canEdit && !pastCorrection) note = html`<p class="sc-receipt__note">${icon('info')}<span>${f.reviewEnabled ? 'يمكنك تعديل التقرير ما دام بانتظار مراجعة المشرف.' : 'يمكنك تعديل التقرير إذا لزم الأمر.'}</span></p>`;
+        else if (!pastCorrection) note = html`<p class="sc-receipt__note">${icon('clock')}<span>انتهى وقت التعديل لهذا اليوم.</span></p>`;
+      }
+      return html`<section class="card sc-receipt${st === 'returned' ? ' sc-receipt--returned' : ''}${S.justSent ? ' anim-fade-up' : ''}" id="sc-receipt">
+        <div class="sc-receipt__head">
+          ${head}
+          ${badges.length ? html`<div class="sc-receipt__badges">${badges}</div>` : ''}
+          <p class="sc-receipt__meta">${meta}</p>
+        </div>
+        <div class="sc-receipt__body">${receiptSummaryHtml(r)}</div>
+        ${actions.length || note ? html`<div class="sc-receipt__foot">${actions.length ? html`<div class="row">${actions}</div>` : ''}${note}</div>` : ''}
+      </section>`;
+    }
+
+    function receiptText() {
+      var f = S.form, r = f.existing;
+      var a = r.answers || {}, d = r.derived || {};
+      var L = [];
+      L.push('إيصال تقرير المتابعة اليومي');
+      L.push('المدرسة: ' + (r.schoolName || (f.school && f.school.name) || ''));
+      L.push('التاريخ: ' + App.date.full(f.date));
+      L.push('الحالة: ' + App.status.label(r.status));
+      if (r.submittedAt) L.push('وقت الإرسال: ' + tsLabel(r.submittedAt, f.date) + (r.late ? ' (متأخر)' : ''));
+      if (r.edits > 0) L.push('مرات التعديل: ' + r.edits);
+      var pair = lessonsPair();
+      fields().forEach(function (fl) {
+        var v = a[fl.id];
+        if (fl.type === 'attendance') {
+          attRows(fl).forEach(function (rr) {
+            var c = (d.attendance && d.attendance[rr]) || (v && v[rr]);
+            if (!c) return;
+            var total = (c.present || 0) + (c.absent || 0);
+            var pct = isNum(c.absencePct) ? c.absencePct : (total ? Math.round(c.absent / total * 1000) / 10 : null);
+            L.push(ATT_LABEL[rr] + ': الحاضرون ' + App.fmt.num(c.present) + ' • الغائبون ' + App.fmt.num(c.absent) + ' • نسبة الغياب ' + App.fmt.pct(pct));
+          });
+          return;
+        }
+        if (fl.type === 'photos') {
+          if (Array.isArray(v) && v.length) L.push(fl.label + ': ' + photosWord(v.length));
+          return;
+        }
+        var t = fmtAnswer(fl, v);
+        if (t) L.push(fl.label + ': ' + t);
+        if (pair && fl === pair.d && d.lessons && isNum(d.lessons.activationPct)) {
+          L.push('غير المفعّلة: ' + App.fmt.num(d.lessons.notActivated) + ' • نسبة التفعيل: ' + App.fmt.pct(d.lessons.activationPct));
+        }
+      });
+      if (r.filledBy) L.push('المعبّئ: ' + r.filledBy);
+      L.push('— ' + ((f.systemTitle || BOOT.systemTitle || '') + ' | ' + APP_NAME).replace(/^ \| /, ''));
+      return L.join('\n');
+    }
+
+    /* ============================================================== RENDER */
+    function render() {
+      var main;
+      var showBar = false;
+      if (S.view === 'loading') main = skeletonHtml();
+      else if (S.view === 'error') main = errorHtml(S.viewError);
+      else if (S.view === 'picker') main = pickerHtml();
+      else {
+        var parts = [dateCardHtml(), topAlertsHtml(), returnedBannersHtml()];
+        if (S.view === 'receipt') parts.push(receiptHtml());
+        else if (S.view === 'closed') parts.push(closedHtml());
+        else if (S.view === 'offday') parts.push(offdayHtml());
+        else { parts.push(formViewHtml()); showBar = fields().length > 0; }
+        main = parts;
+      }
+      App.render(root, html`${heroHtml()}<main class="container-narrow sc-main" id="main">${main}</main>${footerHtml()}${showBar ? barHtml() : ''}`);
+      doc.body.classList.toggle('sc-has-bar', showBar);
+      if (S.view === 'form') afterFormRender();
+      if (S.view === 'receipt') hydratePhotos(root);
+      S.justSent = false;
+    }
+
+    function setView(v) {
+      S.view = v;
+      render();
+    }
+
+    /* ======================================================= FORM LIFECYCLE */
+    function decideView() {
+      var f = S.form;
+      if (S.editing) return 'form';
+      if (f.existing && !f.preview) return 'receipt';
+      if (f.state === 'closed') return 'closed';
+      if ((!f.isWorkday || f.isHoliday) && !f.preview && !S.offdayOverride) return 'offday';
+      return 'form';
+    }
+
+    function loadForm(form, opts) {
+      var o = opts || {};
+      S.form = form;
+      S.serverError = '';
+      S.showErrors = false;
+      S.errors = {};
+      S.draftRestored = false;
+      S.clock = { server: hhmmToMin(form.now) || 0, client: Date.now() };
+      S.correcting = form.state === 'correction';
+      S.editing = S.correcting;
+      S.correctionNote = S.correcting && form.existing ? str(form.existing.reviewNote) : '';
+      if (!o.keepOffday) S.offdayOverride = false;
+      var v = decideView();
+      if (v === 'form') initFormState();
+      setView(v);
+      if (!o.noScroll) window.scrollTo(0, 0);
+    }
+
+    /** Builds the working copy of the answers: existing report → draft → empty. */
+    function initFormState() {
+      var f = S.form;
+      var src = S.editing && f.existing ? clone(f.existing.answers || {}) : {};
+      var filled = S.editing && f.existing ? str(f.existing.filledBy) : '';
+      if (!filled) filled = str(App.store.get('filledBy:' + S.token, '') || '');
+      var auto = {};
+      var draft = isPreview() ? null : App.store.get(storeKeyDraft(), null);
+      var base = f.existing ? str(f.existing.updatedAt || 'x') : '';
+      var restored = false;
+      if (draft && typeof draft === 'object' && draft.v === 1 && draft.base === base && draft.answers) {
+        src = draft.answers;
+        if (typeof draft.filledBy === 'string') filled = draft.filledBy;
+        auto = draft.auto && typeof draft.auto === 'object' ? draft.auto : {};
+        restored = true;
+      }
+      S.answers = {};
+      S.att = {};
+      S.auto = {};
+      S.photos = {};
+      S.dirty = false;
+      fields().forEach(function (fl) {
+        var v = src[fl.id];
+        if (fl.type === 'number') S.answers[fl.id] = isNum(v) ? v : toCount(v);
+        else if (fl.type === 'text' || fl.type === 'textarea') S.answers[fl.id] = typeof v === 'string' ? v : '';
+        else if (fl.type === 'select') S.answers[fl.id] = typeof v === 'string' && (fl.options || []).indexOf(v) >= 0 ? v : null;
+        else if (fl.type === 'yesno') S.answers[fl.id] = v === true || v === false ? v : null;
+        else if (fl.type === 'attendance') {
+          attRows(fl).forEach(function (r) {
+            var c = v && typeof v === 'object' && v[r] ? v[r] : {};
+            S.att[r] = { present: toCount(c.present), absent: toCount(c.absent) };
+            S.auto[r] = !!auto[r] && isNum(S.att[r].present);
+          });
+        } else if (fl.type === 'photos') {
+          S.photos[fl.id] = (Array.isArray(v) ? v : []).filter(function (p) { return p && typeof p.id === 'string'; })
+            .slice(0, maxPhotos(fl)).map(function (p) {
+              return { key: App.uid('ph'), status: 'done', photo: { id: p.id, name: str(p.name), w: p.w || 0, h: p.h || 0, size: p.size || 0 }, url: photoUrlCache[p.id] || '' };
+            });
+        }
+      });
+      S.filledBy = filled;
+      if (restored) {
+        var meaningful = hasMeaningfulAnswers();
+        S.draftRestored = meaningful && !f.existing;
+        if (meaningful && f.existing) setTimeout(function () { App.toast('استعدنا تعديلاتك التي لم تُرسل بعد', 'info'); }, 300);
+      }
+    }
+
+    function hasMeaningfulAnswers() {
+      var any = false;
+      fields().forEach(function (fl) {
+        var v = S.answers[fl.id];
+        if (fl.type === 'attendance') { attRows(fl).forEach(function (r) { if (S.att[r] && (isNum(S.att[r].present) || isNum(S.att[r].absent))) any = true; }); }
+        else if (fl.type === 'photos') { if ((S.photos[fl.id] || []).length) any = true; }
+        else if (v !== null && v !== undefined && v !== '') any = true;
+      });
+      return any;
+    }
+
+    function afterFormRender() {
+      var af = attField();
+      if (af) attRows(af).forEach(function (r) { updateAttRow(r); });
+      if (lessonsPair()) updateLessons();
+      fields().forEach(function (fl) {
+        if (fl.type === 'text' || fl.type === 'textarea') updateCounter(fl.id);
+        if (fl.type === 'textarea') autoGrow(doc.getElementById('in-' + fl.id));
+        if (fl.type === 'photos') { paintThumbs(fl.id); hydratePhotos(doc.getElementById('up-' + fl.id)); }
+      });
+      if (S.showErrors) applyErrors(validateAll(), false);
+      refreshStatus();
+    }
+
+    /* ---------------------------------------------------------- the answers */
+    function buildAnswers() {
+      var out = {};
+      fields().forEach(function (fl) {
+        if (fl.type === 'attendance') {
+          var o = {};
+          attRows(fl).forEach(function (r) {
+            var c = S.att[r] || {};
+            o[r] = { present: isNum(c.present) ? c.present : null, absent: isNum(c.absent) ? c.absent : null };
+          });
+          out[fl.id] = o;
+        } else if (fl.type === 'photos') {
+          out[fl.id] = (S.photos[fl.id] || []).filter(function (it) { return it.status === 'done' && it.photo; })
+            .map(function (it) { return { id: it.photo.id, name: it.photo.name, w: it.photo.w, h: it.photo.h, size: it.photo.size }; });
+        } else if (fl.type === 'text' || fl.type === 'textarea') {
+          out[fl.id] = str(S.answers[fl.id]).trim();
+        } else {
+          var v = S.answers[fl.id];
+          out[fl.id] = v === undefined ? null : v;
+        }
+      });
+      return out;
+    }
+
+    /* ---------------------------------------------------------- validation */
+    function validateField(fl) {
+      if (fl.type === 'number') {
+        var n = S.answers[fl.id];
+        if (!isNum(n)) return fl.required ? { msg: 'أدخل العدد.' } : null;
+        var b = numBounds(fl);
+        if (n < b.min) return { msg: 'أقل قيمة مسموحة ' + App.fmt.num(b.min) + '.' };
+        if (n > b.max) return { msg: 'أكبر قيمة مسموحة ' + App.fmt.num(b.max) + '.' };
+        var pair = lessonsPair();
+        if (pair && fl === pair.d && isNum(S.answers[pair.p.id]) && n > S.answers[pair.p.id]) {
+          return { msg: 'أكبر من عدد الحصص المخطط لها.' };
+        }
+        return null;
+      }
+      if (fl.type === 'text' || fl.type === 'textarea') {
+        var s = str(S.answers[fl.id]).trim();
+        var max = fl.type === 'textarea' ? MAX_AREA : MAX_TEXT;
+        if (!s) return fl.required ? { msg: 'اكتب الإجابة.' } : null;
+        if (s.length > max) return { msg: 'النص أطول من المسموح (' + max + ' حرف).' };
+        return null;
+      }
+      if (fl.type === 'select') return fl.required && !S.answers[fl.id] ? { msg: 'اختر إجابة.' } : null;
+      if (fl.type === 'yesno') return fl.required && S.answers[fl.id] !== true && S.answers[fl.id] !== false ? { msg: 'اختر «نعم» أو «لا».' } : null;
+      if (fl.type === 'attendance') {
+        var rows = attRows(fl);
+        for (var i = 0; i < rows.length; i++) {
+          var r = rows[i], c = S.att[r] || {};
+          var p = isNum(c.present), a = isNum(c.absent);
+          var bad = [];
+          if (!p && !a) {
+            if (fl.required) return { msg: 'أدخل عدد الحاضرين والغائبين لفئة ' + ATT_LABEL[r] + '.', bad: ['att-' + r + '-absent', 'att-' + r + '-present'] };
+            continue;
+          }
+          if (!p) bad.push('att-' + r + '-present');
+          if (!a) bad.push('att-' + r + '-absent');
+          if (bad.length) return { msg: 'أكمل عدد ' + (!p ? 'الحاضرين' : 'الغائبين') + ' لفئة ' + ATT_LABEL[r] + '.', bad: bad };
+          if (c.present > MAX_COUNT || c.absent > MAX_COUNT) return { msg: 'الأرقام في فئة ' + ATT_LABEL[r] + ' يجب أن تكون من 0 إلى 100000.', bad: ['att-' + r + '-present', 'att-' + r + '-absent'] };
+          if (fl.required && c.present + c.absent === 0) return { msg: 'مجموع الحاضرين والغائبين لفئة ' + ATT_LABEL[r] + ' لا يمكن أن يكون صفرًا.', bad: ['att-' + r + '-present', 'att-' + r + '-absent'] };
+        }
+        return null;
+      }
+      if (fl.type === 'photos') {
+        var done = (S.photos[fl.id] || []).filter(function (it) { return it.status === 'done'; }).length;
+        return fl.required && !done ? { msg: 'أرفق صورة واحدة على الأقل.' } : null;
+      }
+      return null;
+    }
+    function validateFilledBy() {
+      var s = S.filledBy.trim();
+      if (s.length < 2) return { msg: s ? 'اكتب الاسم كاملًا (حرفان على الأقل).' : 'اكتب اسم من يعبّئ التقرير.' };
+      if (s.length > 80) return { msg: 'الاسم أطول من 80 حرفًا.' };
+      return null;
+    }
+    function validateAll() {
+      var errs = {};
+      fields().forEach(function (fl) { var e = validateField(fl); if (e) errs[fl.id] = e; });
+      var fe = validateFilledBy();
+      if (fe) errs[FILLED] = fe;
+      return errs;
+    }
+    function applyErrors(errs, scroll) {
+      S.errors = errs;
+      $$('.field[data-fid]', root).forEach(function (el) {
+        var id = el.getAttribute('data-fid');
+        setFieldError(id, errs[id] || null);
+      });
+      if (!scroll) return;
+      var first = null;
+      $$('.field[data-fid]', root).some(function (el) { if (errs[el.getAttribute('data-fid')]) { first = el; return true; } return false; });
+      if (first) {
+        var section = first.closest('.sc-q') || first;
+        scrollToEl(section, 'center');
+        var e = errs[first.getAttribute('data-fid')];
+        var target = (e.bad && e.bad.length && doc.getElementById(e.bad[0])) ||
+          first.querySelector('input:not([type="file"]):not([disabled]), textarea, select, .choice, .uploader__drop input');
+        setTimeout(function () { focusNoScroll(target); }, 350);
+        section.classList.remove('sc-flash');
+        void section.offsetWidth;
+        section.classList.add('sc-flash');
+      }
+    }
+    function setFieldError(id, e) {
+      var field = $('.field[data-fid="' + id + '"]', root);
+      var er = doc.getElementById('er-' + id);
+      if (!field || !er) return;
+      field.classList.toggle('has-error', !!e);
+      er.classList.toggle('is-on', !!e);
+      er.querySelector('span').textContent = e ? e.msg : '';
+      $$('input, textarea, select', field).forEach(function (inp) {
+        if (inp.type === 'file') return;
+        var bad = !!e && (!e.bad || e.bad.indexOf(inp.id) >= 0);
+        if (bad) inp.setAttribute('aria-invalid', 'true'); else inp.removeAttribute('aria-invalid');
+      });
+    }
+    function revalidate(id) {
+      if (!S.showErrors && !S.errors[id]) return;
+      var e = id === FILLED ? validateFilledBy() : (fieldById(id) ? validateField(fieldById(id)) : null);
+      if (e) S.errors[id] = e; else delete S.errors[id];
+      setFieldError(id, e);
+      var pair = lessonsPair();
+      if (pair && (id === pair.p.id || id === pair.d.id)) {
+        var other = id === pair.p.id ? pair.d : pair.p;
+        if (S.showErrors || S.errors[other.id]) {
+          var e2 = validateField(other);
+          if (e2) S.errors[other.id] = e2; else delete S.errors[other.id];
+          setFieldError(other.id, e2);
+        }
+      }
+    }
+
+    /* ---------------------------------------------------- live UI updates */
+    function isComplete(fl) {
+      if (fl.type === 'attendance') {
+        return attRows(fl).every(function (r) { var c = S.att[r] || {}; return isNum(c.present) && isNum(c.absent) && (c.present + c.absent > 0 || !fl.required); });
+      }
+      if (fl.type === 'photos') return (S.photos[fl.id] || []).some(function (it) { return it.status === 'done'; });
+      if (fl.type === 'text' || fl.type === 'textarea') return str(S.answers[fl.id]).trim().length > 0;
+      var v = S.answers[fl.id];
+      return v !== null && v !== undefined && v !== '';
+    }
+    function refreshStatus() {
+      var list = fields();
+      var pair = lessonsPair();
+      var total = 0, done = 0;
+      list.forEach(function (fl) {
+        var ok = isComplete(fl) && !validateField(fl);
+        if (fl.required) { total++; if (ok) done++; }
+        if (pair && (fl === pair.p || fl === pair.d)) return;
+        var sec = doc.getElementById('q-' + fl.id);
+        if (sec) sec.classList.toggle('is-done', ok);
+      });
+      if (pair) {
+        var lsec = doc.getElementById('q-lessons');
+        if (lsec) lsec.classList.toggle('is-done', isComplete(pair.p) && isComplete(pair.d) && !validateField(pair.p) && !validateField(pair.d));
+      }
+      var fbOk = !validateFilledBy();
+      total++; if (fbOk) done++;
+      var fsec = doc.getElementById('q-' + FILLED);
+      if (fsec) fsec.classList.toggle('is-done', fbOk);
+      var bar = doc.getElementById('sc-progress');
+      if (bar) bar.style.width = (total ? Math.round(done / total * 100) : 0) + '%';
+      updateBar();
+    }
+    function uploadsPending() {
+      var n = 0;
+      Object.keys(S.photos).forEach(function (k) {
+        (S.photos[k] || []).forEach(function (it) { if (it.status === 'queued' || it.status === 'compressing' || it.status === 'uploading') n++; });
+      });
+      return n;
+    }
+    function updateBar() {
+      var btn = doc.getElementById('sc-submit');
+      var note = doc.getElementById('sc-bar-note');
+      if (!btn || !note) return;
+      var pending = uploadsPending();
+      var disabled = isPreview() || pending > 0 || S.submitting;
+      btn.disabled = disabled;
+      btn.classList.toggle('is-loading', S.submitting);
+      if (S.submitting) btn.setAttribute('aria-busy', 'true'); else btn.removeAttribute('aria-busy');
+      note.classList.toggle('is-busy', pending > 0 || S.submitting);
+      if (isPreview()) App.render(note, html`${icon('eye')}<span>وضع المعاينة — الإرسال معطّل</span>`);
+      else if (S.submitting) App.render(note, html`<span class="spinner"></span><span>جارٍ إرسال التقرير…</span>`);
+      else if (pending > 0) App.render(note, html`<span class="spinner"></span><span>${pending === 1 ? 'جارٍ رفع صورة' : (pending === 2 ? 'جارٍ رفع صورتين' : 'جارٍ رفع ' + photosWord(pending))}… يتفعّل الإرسال بعد اكتمال الرفع</span>`);
+      else if (S.form.reviewEnabled) App.render(note, html`<span>سيصل التقرير للمشرف بحالة: <b>بانتظار المراجعة</b></span>`);
+      else App.render(note, html`<span>سيصل التقرير إلى المشرف مباشرة</span>`);
+    }
+
+    function updateAttRow(r) {
+      var c = S.att[r] || {};
+      var present = doc.getElementById('att-' + r + '-present');
+      var tag = $('[data-tag="' + r + '"]', root);
+      var chip = $('[data-chip="' + r + '"]', root);
+      var hint = $('[data-hint="' + r + '"]', root);
+      if (present) present.classList.toggle('is-auto', !!S.auto[r]);
+      if (tag) tag.hidden = !S.auto[r];
+      var both = isNum(c.present) && isNum(c.absent);
+      var total = both ? c.present + c.absent : 0;
+      if (chip) {
+        chip.hidden = !(both && total > 0);
+        if (both && total > 0) chip.textContent = 'نسبة الغياب ' + App.fmt.pct(Math.round(c.absent / total * 1000) / 10);
+      }
+      if (hint) {
+        var ref = refCount(r);
+        var show = both && ref > 0 && Math.abs(total - ref) / ref > 0.1;
+        hint.hidden = !show;
+        if (show) hint.querySelector('span').textContent = ATT_LABEL[r] + ': المجموع ' + App.fmt.num(total) + ' يختلف عن العدد المسجّل ' + App.fmt.num(ref) + ' — تأكد من الأرقام.';
+      }
+    }
+    function setAttPresent(r, value, isAuto) {
+      S.att[r].present = value;
+      S.auto[r] = !!isAuto && isNum(value);
+      var el = doc.getElementById('att-' + r + '-present');
+      if (el && doc.activeElement !== el) el.value = isNum(value) ? String(value) : '';
+    }
+    function onAttInput(r, part, value) {
+      if (!S.att[r]) S.att[r] = { present: null, absent: null };
+      var c = S.att[r];
+      c[part] = value;
+      if (part === 'present') {
+        S.auto[r] = false;
+      } else {
+        var ref = refCount(r);
+        if (ref > 0 && (!isNum(c.present) || S.auto[r])) {
+          if (isNum(value) && value <= ref) setAttPresent(r, ref - value, true);
+          else if (S.auto[r]) setAttPresent(r, null, false);
+        }
+      }
+      updateAttRow(r);
+      var af = attField();
+      if (af) revalidate(af.id);
+    }
+
+    function updateLessons() {
+      var pair = lessonsPair();
+      if (!pair) return;
+      var p = S.answers[pair.p.id], d = S.answers[pair.d.id];
+      var calc = doc.getElementById('sc-calc');
+      if (!calc) return;
+      var both = isNum(p) && isNum(d);
+      var bad = both && d > p;
+      calc.classList.toggle('is-bad', bad);
+      doc.getElementById('calc-not').textContent = both && !bad ? App.fmt.num(p - d) : '—';
+      var pct = both && p > 0 && !bad ? Math.round(d / p * 1000) / 10 : null;
+      doc.getElementById('calc-pct').textContent = both && !bad ? App.fmt.pct(pct) : '—';
+      doc.getElementById('calc-bar').style.width = (isNum(pct) ? Math.min(100, pct) : 0) + '%';
+    }
+
+    function updateCounter(id) {
+      var fl = fieldById(id);
+      var ct = doc.getElementById('ct-' + id);
+      if (!fl || !ct) return;
+      var max = fl.type === 'textarea' ? MAX_AREA : MAX_TEXT;
+      var len = str(S.answers[id]).length;
+      ct.hidden = len < max * 0.7;
+      ct.textContent = App.fmt.num(len) + ' / ' + App.fmt.num(max);
+      ct.classList.toggle('is-near', len >= max * 0.9 && len <= max);
+      ct.classList.toggle('is-over', len > max);
+    }
+    function autoGrow(ta) {
+      if (!ta) return;
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(Math.max(ta.scrollHeight + 3, 112), 360) + 'px';
+    }
+
+    /* --------------------------------------------------------------- draft */
+    var saveDraftSoon = App.debounce(saveDraftNow, 450);
+    function saveDraftNow() {
+      if (!S.form || !S.form.ok || isPreview() || S.view !== 'form' || !S.dirty) return;
+      App.store.set(storeKeyDraft(), {
+        v: 1,
+        base: S.form.existing ? str(S.form.existing.updatedAt || 'x') : '',
+        answers: buildAnswers(),
+        filledBy: S.filledBy,
+        auto: S.auto,
+        savedAt: Date.now()
+      });
+    }
+    function markDirty() {
+      S.dirty = true;
+      saveDraftSoon();
+    }
+    function clearDraft() {
+      saveDraftSoon.cancel();
+      App.store.del(storeKeyDraft());
+    }
+    function pruneOldDrafts() {
+      try {
+        var prefix = 'nabd:draft:' + S.token + ':';
+        var limit = App.date.add(App.date.today(), -7);
+        var drop = [];
+        for (var i = 0; i < window.localStorage.length; i++) {
+          var k = window.localStorage.key(i);
+          if (k && k.indexOf(prefix) === 0 && k.slice(prefix.length) < limit) drop.push(k);
+        }
+        drop.forEach(function (k) { window.localStorage.removeItem(k); });
+      } catch (e) { /* storage unavailable */ }
+    }
+
+    /* ============================================================== PHOTOS */
+    function uploaderInner(fl) {
+      var items = S.photos[fl.id] || [];
+      var max = maxPhotos(fl);
+      var full = items.length >= max;
+      var disabled = isPreview();
+      var dis = disabled ? App.raw(' disabled') : '';
+      var parts = [];
+      if (!items.length) {
+        parts.push(html`<div class="sc-up-zone"><label class="uploader__drop${disabled ? ' is-disabled' : ''}"${disabled ? App.raw(' aria-disabled="true"') : ''}>
+          ${icon('camera')}
+          <span>${disabled ? 'رفع الصور معطّل في وضع المعاينة' : 'اضغط لإضافة صور الشواهد'}</span>
+          <small class="uploader__hint">من المعرض أو الكاميرا${fl.help ? '' : ' • حتى ' + photosWordG(max)}</small>
+          <input type="file" accept="image/*" multiple data-kind="file" data-fid="${fl.id}" aria-label="اختيار صور الشواهد"${dis}>
+        </label></div>`);
+      } else {
+        parts.push(html`<div class="uploader__grid">${items.map(function (it, i) { return thumbHtml(fl, it, i); })}${!full ? html`<label class="sc-add-tile${disabled ? ' is-disabled' : ''}">${icon('plus')}<span>إضافة</span>
+            <input type="file" accept="image/*" multiple data-kind="file" data-fid="${fl.id}" aria-label="إضافة صور أخرى"${dis}></label>` : ''}</div>`);
+      }
+      var pending = items.filter(function (it) { return it.status !== 'done' && it.status !== 'error'; }).length;
+      var errors = items.filter(function (it) { return it.status === 'error'; }).length;
+      var noteTxt = pending ? 'جارٍ الرفع…' : (errors ? 'تعذّر رفع ' + photosWordG(errors) : (items.length ? App.fmt.num(items.length) + ' من ' + App.fmt.num(max) : ''));
+      var cam = COARSE && !full && !disabled
+        ? html`<label class="btn btn-secondary btn-sm sc-file-btn">${icon('camera')}<span>التقاط صورة</span><input type="file" accept="image/*" capture="environment" data-kind="file" data-fid="${fl.id}" aria-label="التقاط صورة بالكاميرا"></label>`
+        : html`<span></span>`;
+      if (cam || noteTxt) parts.push(html`<div class="uploader__actions">${cam}<span class="sc-up-note${pending ? ' is-busy' : ''}" aria-live="polite">${noteTxt}</span></div>`);
+      return parts;
+    }
+    function thumbHtml(fl, it, i) {
+      var n = i + 1;
+      var cls = 'thumb';
+      if (it.status === 'queued' || it.status === 'compressing' || it.status === 'uploading') cls += ' is-uploading';
+      if (it.status === 'error') cls += ' is-error' + (it.payload ? '' : ' sc-fatal');
+      var hasUrl = !!(it.url || it.thumbUrl);
+      if (it.status === 'done' && !hasUrl) cls += ' sc-loading';
+      return html`<div class="${cls}" data-key="${it.key}" title="${it.status === 'error' ? it.error || 'تعذّر رفع الصورة' : ''}">
+        ${hasUrl || (it.status === 'done' && it.photo) ? html`<img alt="صورة الشاهد ${n}" data-key-img="${it.key}"${it.status === 'done' && !hasUrl && it.photo ? html` data-photo-id="${it.photo.id}"` : ''}>` : ''}
+        ${it.status === 'done' ? html`<button type="button" class="sc-thumb-open" data-action="photo-view" data-fid="${fl.id}" data-key="${it.key}" aria-label="عرض الصورة ${n}"></button>` : ''}
+        ${it.status === 'uploading' || it.status === 'compressing' || it.status === 'queued' ? html`<div class="progress" role="progressbar" aria-label="تقدّم رفع الصورة ${n}"><div class="progress__bar" data-progress="${it.key}"></div></div>` : ''}
+        ${it.status === 'error' && it.payload ? html`<button type="button" class="thumb__retry" data-action="photo-retry" data-fid="${fl.id}" data-key="${it.key}">${icon('refresh')}<span>إعادة</span></button>` : ''}
+        ${it.status === 'error' && !it.payload ? html`<span class="sc-thumb-err">صورة غير صالحة</span>` : ''}
+        <button type="button" class="thumb__remove" data-action="photo-remove" data-fid="${fl.id}" data-key="${it.key}" aria-label="حذف الصورة ${n}"${isPreview() ? App.raw(' disabled') : ''}>${icon('x')}</button>
+      </div>`;
+    }
+    function renderUploader(fid) {
+      var box = doc.getElementById('up-' + fid);
+      var fl = fieldById(fid);
+      if (!box || !fl) return;
+      var hadFocus = box.contains(doc.activeElement);
+      App.render(box, html`${uploaderInner(fl)}`);
+      paintThumbs(fid);
+      hydratePhotos(box);
+      if (hadFocus) {
+        var t = box.querySelector('.sc-add-tile input, .uploader__drop input');
+        if (t) focusNoScroll(t);
+      }
+      var sec = doc.getElementById('q-' + fid);
+      if (sec) sec.classList.toggle('is-done', isComplete(fl));
+      refreshStatus();
+    }
+    function paintThumbs(fid) {
+      (S.photos[fid] || []).forEach(function (it) {
+        var img = $('img[data-key-img="' + it.key + '"]', root);
+        var u = it.url || it.thumbUrl;
+        if (img && u) img.src = u;
+        var bar = $('[data-progress="' + it.key + '"]', root);
+        if (bar) bar.style.width = Math.round((it.progress || 0.06) * 100) + '%';
+      });
+    }
+    function findItem(fid, key) {
+      var list = S.photos[fid] || [];
+      for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i];
+      return null;
+    }
+
+    function addFiles(fid, fileList) {
+      var fl = fieldById(fid);
+      if (!fl || isPreview()) return;
+      var files = Array.prototype.slice.call(fileList || []);
+      if (!files.length) return;
+      var items = S.photos[fid] || (S.photos[fid] = []);
+      var free = maxPhotos(fl) - items.length;
+      if (free <= 0) { App.toast('وصلت إلى الحد الأقصى (' + photosWord(maxPhotos(fl)) + ').', 'info'); return; }
+      if (files.length > free) {
+        App.toast('الحد الأقصى ' + photosWord(maxPhotos(fl)) + ' — أُضيفت ' + photosWord(free) + ' فقط.', 'info', 4200);
+        files = files.slice(0, free);
+      }
+      files.forEach(function (file) { items.push({ key: App.uid('ph'), status: 'queued', file: file, progress: 0.04 }); });
+      if (S.errors[fid]) revalidate(fid);
+      renderUploader(fid);
+      pump();
+    }
+
+    function pump() {
+      var next = null;
+      Object.keys(S.photos).some(function (fid) {
+        return (S.photos[fid] || []).some(function (it) {
+          if (it.status === 'queued') { next = { fid: fid, it: it }; return true; }
+          return false;
+        });
+      });
+      if (!next || activeUploads >= UPLOAD_CONCURRENCY) { updateBar(); return; }
+      activeUploads++;
+      processItem(next.fid, next.it).then(done, done);
+      function done() { activeUploads--; pump(); }
+      pump();
+    }
+
+    function processItem(fid, it) {
+      it.status = 'compressing';
+      it.progress = 0.08;
+      var token = S.token;
+      var compress = it.payload ? Promise.resolve(it.payload) : App.image.compress(it.file, { maxSide: 1600, quality: 0.82, maxBytes: 3 * 1024 * 1024 });
+      return compress.then(function (payload) {
+        if (it.removed) return null;
+        it.payload = payload;
+        it.thumbUrl = payload.thumbUrl || payload.previewUrl;
+        it.previewUrl = payload.previewUrl;
+        it.status = 'uploading';
+        it.progress = 0.18;
+        renderUploader(fid);
+        startProgress(it, payload.size);
+        return App.call('api_uploadPhoto', token, { base64: payload.base64, mime: payload.mime, name: payload.name, w: payload.w, h: payload.h });
+      }, function (err) {
+        it.compressFailed = true;
+        throw err;
+      }).then(function (res) {
+        stopProgress(it);
+        if (res === null) return;
+        if (!res || !res.ok || !res.photo || !res.photo.id) throw new Error('تعذّر رفع الصورة. حاول مرة أخرى.');
+        if (it.removed || token !== S.token) { discardRemote(res.photo.id, token); return; }
+        it.photo = res.photo;
+        it.status = 'done';
+        it.progress = 1;
+        it.url = it.thumbUrl;
+        photoUrlCache[res.photo.id] = it.previewUrl || it.thumbUrl;
+        it.payload = null;
+        it.file = null;
+        renderUploader(fid);
+        markDirty();
+        if (S.errors[fid]) revalidate(fid);
+      }).catch(function (err) {
+        stopProgress(it);
+        if (it.removed) return;
+        it.status = 'error';
+        it.error = (err && err.message) || 'تعذّر رفع الصورة.';
+        if (it.compressFailed) { it.payload = null; }
+        renderUploader(fid);
+        App.toast(it.error, 'danger');
+      });
+    }
+    function startProgress(it, size) {
+      stopProgress(it);
+      var k = Math.max(0.03, Math.min(0.14, 60000 / Math.max(size || 1, 60000) * 0.12));
+      it.timer = setInterval(function () {
+        it.progress = it.progress + (0.93 - it.progress) * k;
+        var bar = $('[data-progress="' + it.key + '"]', root);
+        if (bar) bar.style.width = Math.round(it.progress * 100) + '%';
+      }, 220);
+    }
+    function stopProgress(it) { if (it.timer) { clearInterval(it.timer); it.timer = null; } }
+    function discardRemote(id, token) {
+      if (!id) return;
+      App.call('api_discardPhoto', token || S.token, id).catch(function () { /* best effort */ });
+    }
+    function removePhoto(fid, key) {
+      var list = S.photos[fid] || [];
+      var it = findItem(fid, key);
+      if (!it) return;
+      it.removed = true;
+      stopProgress(it);
+      if (it.status === 'done' && it.photo) discardRemote(it.photo.id);
+      if (it.previewUrl && /^blob:/.test(it.previewUrl) && !(it.photo && photoUrlCache[it.photo.id] === it.previewUrl)) {
+        try { URL.revokeObjectURL(it.previewUrl); } catch (e) { /* ignore */ }
+      }
+      list.splice(list.indexOf(it), 1);
+      renderUploader(fid);
+      markDirty();
+      if (S.errors[fid]) revalidate(fid);
+      announce('تم حذف الصورة');
+      pump();
+    }
+    function retryPhoto(fid, key) {
+      var it = findItem(fid, key);
+      if (!it || it.status !== 'error') return;
+      it.status = 'queued';
+      it.error = '';
+      it.progress = 0.04;
+      renderUploader(fid);
+      pump();
+    }
+
+    /* remote photos (already saved on the server) → data URLs, 2 at a time */
+    var remoteQueue = [];
+    var remoteActive = 0;
+    var remotePromises = {};
+    function loadRemotePhoto(id) {
+      if (photoUrlCache[id]) return Promise.resolve(photoUrlCache[id]);
+      if (remotePromises[id]) return remotePromises[id];
+      var token = S.token;
+      remotePromises[id] = new Promise(function (resolve, reject) {
+        remoteQueue.push(function () {
+          return App.call('api_schoolPhoto', token, id).then(function (res) {
+            if (!res || !res.dataUrl || !/^data:image\//.test(res.dataUrl)) throw new Error('bad');
+            photoUrlCache[id] = res.dataUrl;
+            resolve(res.dataUrl);
+          }).catch(function (e) { delete remotePromises[id]; reject(e); });
+        });
+        drainRemote();
+      });
+      return remotePromises[id];
+    }
+    function drainRemote() {
+      while (remoteActive < 2 && remoteQueue.length) {
+        var job = remoteQueue.shift();
+        remoteActive++;
+        job().then(fin, fin);
+      }
+      function fin() { remoteActive--; drainRemote(); }
+    }
+    function hydratePhotos(scope) {
+      if (!scope) return;
+      $$('img[data-photo-id]', scope).forEach(function (img) {
+        var id = img.getAttribute('data-photo-id');
+        if (!id || img.getAttribute('src')) return;
+        var holder = img.closest('.thumb, .sc-gal');
+        loadRemotePhoto(id).then(function (url) {
+          img.src = url;
+          if (holder) holder.classList.remove('sc-loading');
+          Object.keys(S.photos).forEach(function (fid) {
+            (S.photos[fid] || []).forEach(function (it) { if (it.photo && it.photo.id === id) it.url = url; });
+          });
+        }, function () {
+          if (!holder) return;
+          holder.classList.remove('sc-loading');
+          if (holder.classList.contains('sc-gal')) {
+            holder.classList.add('sc-broken');
+            App.render(holder, html`${icon('image')}`);
+            holder.setAttribute('aria-label', 'تعذّر عرض الصورة');
+          } else {
+            img.remove();
+            holder.setAttribute('title', 'تعذّر عرض الصورة');
+            if (!holder.querySelector('.sc-thumb-err')) holder.insertAdjacentHTML('beforeend', '<span class="sc-thumb-err" style="color:var(--muted)">تعذّر عرض الصورة</span>');
+          }
+        });
+      });
+    }
+    function openLightbox(url, label) {
+      var box = doc.createElement('div');
+      box.className = 'lightbox';
+      var img = doc.createElement('img');
+      img.alt = label || 'صورة الشاهد';
+      box.appendChild(img);
+      App.modal({ title: label || 'صورة الشاهد', body: box, size: 'lg' });
+      if (url) img.src = url;
+    }
+    function viewPhotoById(id, label) {
+      if (photoUrlCache[id]) { openLightbox(photoUrlCache[id], label); return; }
+      loadRemotePhoto(id).then(function (u) { openLightbox(u, label); }, function () { App.toast('تعذّر عرض الصورة. حاول مرة أخرى.', 'danger'); });
+    }
+
+    /* ============================================================== SUBMIT */
+    function photoErrorsCount() {
+      var n = 0;
+      Object.keys(S.photos).forEach(function (fid) { (S.photos[fid] || []).forEach(function (it) { if (it.status === 'error') n++; }); });
+      return n;
+    }
+    function submit() {
+      if (S.submitting || !S.form) return;
+      if (isPreview()) { App.toast('وضع المعاينة — لا يتم إرسال أي بيانات.', 'info'); return; }
+      if (uploadsPending()) { App.toast('انتظر حتى يكتمل رفع الصور.', 'info'); return; }
+      S.showErrors = true;
+      var errs = validateAll();
+      var keys = Object.keys(errs);
+      applyErrors(errs, true);
+      if (keys.length) {
+        App.toast(keys.length === 1 ? 'أكمل الحقل المطلوب قبل الإرسال.' : 'أكمل الحقول المطلوبة (' + keys.length + ') قبل الإرسال.', 'danger');
+        return;
+      }
+      var errPhotos = photoErrorsCount();
+      var go = errPhotos
+        ? App.confirm({ title: 'صور لم تُرفع', text: 'لم يكتمل رفع ' + photosWordG(errPhotos) + '. هل تريد إرسال التقرير بدونها؟', okText: 'إرسال بدونها', cancelText: 'رجوع' })
+        : Promise.resolve(true);
+      go.then(function (ok) { if (ok) doSubmit(); });
+    }
+    function doSubmit() {
+      var payload = { answers: buildAnswers(), filledBy: S.filledBy.trim() };
+      if (S.form.state === 'correction') payload.date = S.form.date;
+      saveDraftNow();
+      S.submitting = true;
+      S.serverError = '';
+      var errBox = doc.getElementById('sc-server-error');
+      if (errBox) errBox.remove();
+      updateBar();
+      var token = S.token;
+      App.call('api_submitReport', token, payload).then(function (res) {
+        S.submitting = false;
+        if (!res || !res.ok || !res.receipt) throw new Error('لم يكتمل الإرسال. حاول مرة أخرى.');
+        var rec = res.receipt;
+        clearDraft();
+        App.store.set('filledBy:' + token, payload.filledBy);
+        var lp = lessonsPair();
+        if (lp && isNum(payload.answers[lp.p.id])) App.store.set('last:' + token, { planned: payload.answers[lp.p.id] });
+        var wasCorrection = S.correcting;
+        S.form.existing = rec;
+        S.form.date = rec.date || S.form.date;
+        if (Array.isArray(S.form.returned)) S.form.returned = S.form.returned.filter(function (r) { return r.date !== rec.date; });
+        if (S.form.state === 'correction') S.form.canEdit = false;
+        else if (rec.status === 'approved' && S.form.reviewEnabled) S.form.canEdit = false;
+        S.editing = false;
+        S.correcting = false;
+        S.dirty = false;
+        S.showErrors = false;
+        S.justSent = true;
+        S.view = 'receipt';
+        render();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        var t = doc.getElementById('sc-receipt-title');
+        focusNoScroll(t);
+        App.toast(wasCorrection ? 'تم إرسال التصحيح إلى المشرف' : 'تم إرسال التقرير إلى المشرف');
+        announce('تم إرسال التقرير');
+      }).catch(function (err) {
+        S.submitting = false;
+        var msg = (err && err.message) || 'تعذّر إرسال التقرير.';
+        var network = err && (err.code === 'NETWORK' || err.code === 'TIMEOUT' || err.code === 'BUSY' || err.code === 'UNKNOWN' || err.code === 'NO_RUNTIME');
+        S.serverError = msg;
+        S.serverErrorRetry = !!network;
+        showServerError();
+        App.toast(msg, 'danger', 6000);
+        highlightServerField(msg);
+        updateBar();
+      });
+    }
+    function showServerError() {
+      var old = doc.getElementById('sc-server-error');
+      if (old) old.remove();
+      var anchor = $('.sc-main > .sc-date', root);
+      if (!anchor) { render(); return; }
+      var tmp = doc.createElement('div');
+      App.render(tmp, serverErrorHtml());
+      var box = tmp.firstElementChild;
+      if (!box) return;
+      anchor.insertAdjacentElement('afterend', box);
+      scrollToEl(box, 'center');
+    }
+    /** Server validation messages quote the field label in «…» — point at that field. */
+    function highlightServerField(msg) {
+      var m = /«([^»]+)»/.exec(msg || '');
+      var fl = null;
+      if (m) fl = fields().filter(function (x) { return x.label === m[1]; })[0] || null;
+      if (!fl && /الحصص المفعّلة/.test(msg)) fl = kpiField('lessons_done');
+      if (!fl && /اسم من يعبّئ/.test(msg)) { setFieldError(FILLED, { msg: msg }); return; }
+      if (fl) setFieldError(fl.id, { msg: msg.replace(/^«[^»]+»:\s*/, '') });
+    }
+
+    /* ======================================================== LOAD ACTIONS */
+    function fetchForm(token, date) {
+      return App.call('api_schoolForm', token, date || null).then(function (res) {
+        if (!res || typeof res !== 'object') throw new Error('تعذّر تحميل النموذج. حاول مرة أخرى.');
+        return res;
+      });
+    }
+    function startCorrection(date, btn) {
+      var f = S.form;
+      if (f.existing && f.date === date && f.existing.status === 'returned') {
+        S.editing = true;
+        S.correcting = true;
+        S.correctionNote = str(f.existing.reviewNote);
+        S.showErrors = false;
+        S.errors = {};
+        S.draftRestored = false;
+        initFormState();
+        S.view = 'form';
+        render();
+        window.scrollTo(0, 0);
+        return;
+      }
+      App.busy(btn, fetchForm(S.token, date)).then(function (res) {
+        if (!res.ok) {
+          App.toast(res.error || 'لا يمكن فتح تقرير هذا اليوم.', 'danger');
+          if (res.code === 'NOT_EDITABLE') reloadToday(true);
+          return;
+        }
+        loadForm(res);
+      }, function (err) { App.toast(err.message, 'danger'); });
+    }
+    function reloadToday(quiet, btn) {
+      var p = fetchForm(S.token, null);
+      if (btn) App.busy(btn, p);
+      else if (!quiet) setView('loading');
+      return p.then(function (res) {
+        if (!res.ok) { showFormError(res); return; }
+        loadForm(res);
+      }, function (err) {
+        if (quiet) { App.toast(err.message, 'danger'); return; }
+        S.viewError = { code: 'ERROR', error: err.message, network: err.code === 'NETWORK' };
+        setView('error');
+      });
+    }
+    function showFormError(res) {
+      if (S.mode === 'picker' && (res.code === 'BAD_LINK' || res.code === 'INACTIVE')) {
+        App.store.del('school');
+        S.token = '';
+        S.form = null;
+        S.pickChange = true;
+        S.pickNotice = res.code === 'INACTIVE' ? res.error : 'لم يعد رابط مدرستك المحفوظ صالحًا. اختر مدرستك وأدخل رمزها من جديد.';
+        setView('picker');
+        return;
+      }
+      S.viewError = res;
+      setView('error');
+    }
+
+    /* picker */
+    function pickerEnter(btn) {
+      var pinEl = doc.getElementById('sc-pin');
+      var pin = digitsOnly(pinEl ? pinEl.value : '');
+      if (!S.pickId) {
+        App.toast('اختر مدرستك من القائمة أولًا.', 'danger');
+        var s = doc.getElementById('sc-search') || $('.sc-pick', root);
+        focusNoScroll(s);
+        return;
+      }
+      if (pin.length !== 4) { setPinError('اكتب رمز المدرسة المكوّن من 4 أرقام.'); return; }
+      setPinError('');
+      var school = (S.picker.schools || []).filter(function (x) { return x.id === S.pickId; })[0];
+      var p = App.call('api_resolveSchool', S.pickId, pin).then(function (res) {
+        if (!res || !res.ok || !res.token) throw new Error('تعذّر الدخول. حاول مرة أخرى.');
+        App.store.set('school', { token: res.token, schoolName: school ? school.name : '' });
+        S.token = res.token;
+        return fetchForm(res.token, null);
+      });
+      App.busy(btn, p).then(function (res) {
+        if (!res.ok) { showFormError(res); return; }
+        S.pickChange = false;
+        S.pickNotice = '';
+        pruneOldDrafts();
+        loadForm(res);
+      }, function (err) {
+        setPinError(err.message);
+        var f = doc.getElementById('pin-field');
+        if (f) { f.classList.remove('sc-shake'); void f.offsetWidth; f.classList.add('sc-shake'); }
+        if (pinEl) { pinEl.select(); focusNoScroll(pinEl); }
+      });
+    }
+    function setPinError(msg) {
+      var f = doc.getElementById('pin-field');
+      var e = doc.getElementById('pin-err');
+      var inp = doc.getElementById('sc-pin');
+      if (!f || !e) return;
+      f.classList.toggle('has-error', !!msg);
+      e.querySelector('span').textContent = msg || '';
+      if (inp) { if (msg) inp.setAttribute('aria-invalid', 'true'); else inp.removeAttribute('aria-invalid'); }
+    }
+    function continueStored(btn) {
+      var stored = App.store.get('school', null);
+      if (!stored || !stored.token) { S.pickChange = true; setView('picker'); return; }
+      S.token = String(stored.token);
+      App.busy(btn, fetchForm(S.token, null)).then(function (res) {
+        if (!res.ok) { showFormError(res); return; }
+        if (res.school && res.school.name && res.school.name !== stored.schoolName) App.store.set('school', { token: stored.token, schoolName: res.school.name });
+        pruneOldDrafts();
+        loadForm(res);
+      }, function (err) { App.toast(err.message, 'danger'); });
+    }
+
+    /* =============================================================== EVENTS */
+    function closestAction(t) { return t && t.closest ? t.closest('[data-action]') : null; }
+
+    root.addEventListener('click', function (ev) {
+      var el = closestAction(ev.target);
+      if (!el || !root.contains(el) || el.disabled) return;
+      var a = el.getAttribute('data-action');
+      var fid = el.getAttribute('data-fid');
+      switch (a) {
+        case 'choose': return onChoose(el);
+        case 'step': return; // handled by pointer/keyboard logic below
+        case 'submit': return submit();
+        case 'photo-remove': return removePhoto(fid, el.getAttribute('data-key'));
+        case 'photo-retry': return retryPhoto(fid, el.getAttribute('data-key'));
+        case 'photo-view': {
+          var it = findItem(fid, el.getAttribute('data-key'));
+          if (!it) return;
+          var lbl = (el.getAttribute('aria-label') || '').replace('عرض الصورة', 'صورة الشاهد') || 'صورة الشاهد';
+          if (it.previewUrl) openLightbox(it.previewUrl, lbl);
+          else if (it.photo) viewPhotoById(it.photo.id, lbl);
+          return;
+        }
+        case 'view-photo': return viewPhotoById(el.getAttribute('data-id'), (el.getAttribute('aria-label') || '').replace('عرض الصورة', 'صورة الشاهد'));
+        case 'edit': {
+          S.editing = true;
+          S.correcting = false;
+          S.showErrors = false;
+          S.errors = {};
+          S.draftRestored = false;
+          initFormState();
+          setView('form');
+          window.scrollTo(0, 0);
+          return;
+        }
+        case 'cancel-edit': {
+          if (S.form.state === 'correction') { reloadToday(false); return; }
+          S.editing = false;
+          S.correcting = false;
+          S.serverError = '';
+          clearDraft();
+          setView(decideView());
+          window.scrollTo(0, 0);
+          return;
+        }
+        case 'correct': return startCorrection(el.getAttribute('data-date'), el);
+        case 'back-today': return reloadToday(true, el);
+        case 'copy-receipt':
+          App.copy(receiptText()).then(function (ok) { if (ok) App.toast('تم نسخ الإيصال'); });
+          return;
+        case 'offday-fill':
+          S.offdayOverride = true;
+          initFormState();
+          setView('form');
+          return;
+        case 'retry-load':
+          if (S.token) reloadToday(false);
+          return;
+        case 'more-returned':
+          S.showAllReturned = true;
+          render();
+          return;
+        case 'dismiss-error': {
+          S.serverError = '';
+          var box = doc.getElementById('sc-server-error');
+          if (box) box.remove();
+          return;
+        }
+        case 'draft-reset':
+          App.confirm({ title: 'البدء من جديد', text: 'سيتم مسح ما كتبته في هذا التقرير من هذا الجهاز.', okText: 'مسح والبدء من جديد', danger: true }).then(function (ok) {
+            if (!ok) return;
+            Object.keys(S.photos).forEach(function (k) { (S.photos[k] || []).forEach(function (it) { if (it.photo) discardRemote(it.photo.id); }); });
+            clearDraft();
+            S.draftRestored = false;
+            initFormState();
+            S.draftRestored = false;
+            render();
+          });
+          return;
+        case 'use-last': {
+          var lf = el.getAttribute('data-fid');
+          var lv = toCount(el.getAttribute('data-value'));
+          if (!fieldById(lf) || lv === null) return;
+          S.answers[lf] = lv;
+          var li = doc.getElementById('in-' + lf);
+          if (li) li.value = String(lv);
+          var box = doc.getElementById('sc-last');
+          if (box) box.remove();
+          updateLessons();
+          markDirty();
+          revalidate(lf);
+          refreshStatus();
+          var pr = lessonsPair();
+          if (pr) focusNoScroll(doc.getElementById('in-' + pr.d.id));
+          return;
+        }
+        case 'use-principal': {
+          var inp = doc.getElementById('in-filledBy');
+          S.filledBy = str(S.form.school && S.form.school.principal).trim();
+          if (inp) inp.value = S.filledBy;
+          var sg = doc.getElementById('sc-suggest');
+          if (sg) sg.textContent = '';
+          markDirty();
+          revalidate(FILLED);
+          refreshStatus();
+          return;
+        }
+        case 'pick': {
+          S.pickId = el.getAttribute('data-id') || '';
+          var pinVal = (doc.getElementById('sc-pin') || {}).value || '';
+          render();
+          var pinEl = doc.getElementById('sc-pin');
+          if (pinEl) { pinEl.value = pinVal; setTimeout(function () { focusNoScroll(pinEl); }, 30); }
+          return;
+        }
+        case 'pick-clear': {
+          S.pickId = '';
+          render();
+          var s = doc.getElementById('sc-search');
+          if (s) focusNoScroll(s);
+          return;
+        }
+        case 'pick-other':
+          S.pickChange = true;
+          S.pickId = '';
+          render();
+          return;
+        case 'pick-back':
+          S.pickChange = false;
+          S.pickId = '';
+          S.pickNotice = '';
+          render();
+          return;
+        case 'enter': return pickerEnter(el);
+        case 'continue': return continueStored(el);
+        case 'change-school':
+          S.token = '';
+          S.form = null;
+          S.pickId = '';
+          S.pickChange = true;
+          S.pickNotice = '';
+          setView('picker');
+          window.scrollTo(0, 0);
+          return;
+        default:
+          return;
+      }
+    });
+
+    function onChoose(el) {
+      var fid = el.getAttribute('data-fid');
+      var fl = fieldById(fid);
+      if (!fl) return;
+      var opt = optionsOf(fl)[+el.getAttribute('data-index')];
+      if (!opt) return;
+      var cur = S.answers[fid];
+      var next = opt.value;
+      if (cur === next && !fl.required) next = null;
+      S.answers[fid] = next;
+      $$('.choice[data-fid="' + fid + '"]', root).forEach(function (b) {
+        var o = optionsOf(fl)[+b.getAttribute('data-index')];
+        b.setAttribute('aria-checked', o && o.value === next ? 'true' : 'false');
+      });
+      markDirty();
+      revalidate(fid);
+      refreshStatus();
+    }
+
+    root.addEventListener('input', function (ev) {
+      var t = ev.target;
+      var kind = t && t.getAttribute ? t.getAttribute('data-kind') : null;
+      if (!kind) return;
+      if (kind === 'num' || kind === 'att') {
+        var clean = digitsOnly(t.value).replace(/^0+(?=\d)/, '').slice(0, 6);
+        if (clean !== t.value) t.value = clean;
+        var val = clean === '' ? null : parseInt(clean, 10);
+        if (kind === 'num') {
+          var fid = t.getAttribute('data-fid');
+          S.answers[fid] = val;
+          var pair = lessonsPair();
+          if (pair && (fid === pair.p.id || fid === pair.d.id)) updateLessons();
+          if (pair && fid === pair.p.id && val !== null) { var sl = doc.getElementById('sc-last'); if (sl) sl.remove(); }
+          revalidate(fid);
+        } else {
+          onAttInput(t.getAttribute('data-row'), t.getAttribute('data-part'), val);
+        }
+        markDirty();
+        refreshStatus();
+        return;
+      }
+      if (kind === 'text') {
+        var id = t.getAttribute('data-fid');
+        S.answers[id] = t.value;
+        updateCounter(id);
+        if (t.tagName === 'TEXTAREA') autoGrow(t);
+        markDirty();
+        revalidate(id);
+        refreshStatus();
+        return;
+      }
+      if (kind === 'filledBy') {
+        S.filledBy = t.value;
+        markDirty();
+        revalidate(FILLED);
+        refreshStatus();
+        return;
+      }
+      if (kind === 'search') {
+        S.pickQuery = t.value;
+        var list = doc.getElementById('sc-picklist');
+        if (list && S.picker) App.render(list, html`${pickListItems(S.picker.schools || [])}`);
+        return;
+      }
+      if (kind === 'pin') {
+        var d = digitsOnly(t.value).slice(0, 4);
+        if (d !== t.value) t.value = d;
+        if (d.length) setPinError('');
+      }
+    });
+
+    root.addEventListener('change', function (ev) {
+      var t = ev.target;
+      var kind = t && t.getAttribute ? t.getAttribute('data-kind') : null;
+      if (kind === 'file') {
+        var files = t.files;
+        var fid = t.getAttribute('data-fid');
+        var copy = Array.prototype.slice.call(files || []);
+        try { t.value = ''; } catch (e) { /* ignore */ }
+        addFiles(fid, copy);
+      } else if (kind === 'select') {
+        var fl = fieldById(t.getAttribute('data-fid'));
+        if (!fl) return;
+        var o = optionsOf(fl)[+t.value];
+        S.answers[fl.id] = t.value === '' || !o ? null : o.value;
+        markDirty();
+        revalidate(fl.id);
+        refreshStatus();
+      }
+    });
+
+    root.addEventListener('keydown', function (ev) {
+      var t = ev.target;
+      if (!t || !t.getAttribute) return;
+      var kind = t.getAttribute('data-kind');
+      if (ev.key === 'Enter' && !ev.isComposing) {
+        if (kind === 'pin') { ev.preventDefault(); pickerEnter(doc.getElementById('sc-enter')); return; }
+        if (kind === 'search') { ev.preventDefault(); var first = $('.sc-pick', root); if (first) first.click(); return; }
+        if (t.hasAttribute('data-nav') && t.tagName === 'INPUT') {
+          ev.preventDefault();
+          focusNext(t);
+          return;
+        }
+      }
+      if (kind === 'num' && (ev.key === 'ArrowUp' || ev.key === 'ArrowDown')) {
+        ev.preventDefault();
+        stepField(t.getAttribute('data-fid'), ev.key === 'ArrowUp' ? 1 : -1);
+        return;
+      }
+      if (t.classList.contains('choice') && t.getAttribute('role') === 'radio') {
+        var keys = { ArrowLeft: 1, ArrowDown: 1, ArrowRight: -1, ArrowUp: -1 };
+        if (keys[ev.key] !== undefined) {
+          ev.preventDefault();
+          var group = $$('.choice[data-fid="' + t.getAttribute('data-fid') + '"]', root);
+          var i = group.indexOf(t);
+          var n = group[(i + keys[ev.key] + group.length) % group.length];
+          if (n) { n.focus(); onChoose(n); }
+        }
+      }
+    });
+    function focusNext(cur) {
+      var list = $$('[data-nav]', root).filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+      var i = list.indexOf(cur);
+      for (var j = i + 1; j < list.length; j++) {
+        var el = list[j];
+        if (el.classList.contains('is-auto')) continue;
+        focusNoScroll(el);
+        scrollToEl(el, 'center');
+        return;
+      }
+      cur.blur();
+    }
+
+    /* select-on-focus for numeric inputs; out-of-range numbers are flagged on blur */
+    root.addEventListener('focusin', function (ev) {
+      var t = ev.target;
+      var kind = t && t.getAttribute ? t.getAttribute('data-kind') : null;
+      if (kind === 'num' || kind === 'att' || kind === 'pin') {
+        setTimeout(function () { try { t.setSelectionRange(0, t.value.length); } catch (e) { /* ignore */ } }, 0);
+      }
+      syncKeyboard();
+    });
+    root.addEventListener('focusout', function (ev) {
+      var t = ev.target;
+      if (t && t.getAttribute && t.getAttribute('data-kind') === 'num' && t.value !== '') {
+        var fl = fieldById(t.getAttribute('data-fid'));
+        var e = fl ? validateField(fl) : null;
+        if (e) { S.errors[fl.id] = e; setFieldError(fl.id, e); }
+      }
+      setTimeout(syncKeyboard, 120);
+    });
+    /* The sticky bar steps aside only while the on-screen keyboard is really open
+       (visual viewport much shorter than the layout viewport), never on desktop. */
+    function syncKeyboard() {
+      var vv = window.visualViewport;
+      var a = doc.activeElement;
+      var typing = !!a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') && a.type !== 'file';
+      var kb = !!vv && COARSE && (window.innerHeight - vv.height * (vv.scale || 1)) > 140;
+      doc.body.classList.toggle('sc-typing', typing && kb);
+    }
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', syncKeyboard);
+
+    /* steppers: tap = one step, hold = repeat */
+    var hold = { timer: null, rep: null, btn: null, fid: '', dir: 0, pending: false };
+    function stepField(fid, dir) {
+      var fl = fieldById(fid);
+      if (!fl) return;
+      var b = numBounds(fl);
+      var cur = S.answers[fid];
+      var next = isNum(cur) ? cur + dir : (dir > 0 ? Math.max(b.min, 1) : b.min);
+      next = Math.max(b.min, Math.min(b.max, next));
+      S.answers[fid] = next;
+      var inp = doc.getElementById('in-' + fid);
+      if (inp) inp.value = String(next);
+      var pair = lessonsPair();
+      if (pair && (fid === pair.p.id || fid === pair.d.id)) updateLessons();
+      if (pair && fid === pair.p.id) { var sl = doc.getElementById('sc-last'); if (sl) sl.remove(); }
+      markDirty();
+      revalidate(fid);
+      refreshStatus();
+    }
+    function stopHold() {
+      clearTimeout(hold.timer);
+      clearInterval(hold.rep);
+      hold.timer = hold.rep = null;
+    }
+    /* Mouse: step on press. Touch/pen: step on release, so a scroll that starts on a
+       button never changes a number (the browser cancels the pointer when it scrolls). */
+    root.addEventListener('pointerdown', function (ev) {
+      var el = ev.target.closest && ev.target.closest('[data-action="step"]');
+      if (!el || el.disabled || (ev.button !== undefined && ev.button !== 0)) return;
+      if (ev.pointerType === 'mouse') ev.preventDefault();
+      stopHold();
+      hold.btn = el;
+      hold.fid = el.getAttribute('data-fid');
+      hold.dir = +el.getAttribute('data-step');
+      hold.pending = ev.pointerType !== 'mouse';
+      if (!hold.pending) stepField(hold.fid, hold.dir);
+      hold.timer = setTimeout(function () {
+        hold.pending = false;
+        stepField(hold.fid, hold.dir);
+        hold.rep = setInterval(function () { stepField(hold.fid, hold.dir); }, 85);
+      }, 420);
+    });
+    root.addEventListener('pointerup', function () {
+      if (!hold.btn) return;
+      if (hold.pending) stepField(hold.fid, hold.dir);
+      stopHold();
+      hold.btn = null;
+    }, true);
+    ['pointercancel', 'pointerleave'].forEach(function (n) {
+      root.addEventListener(n, function (ev) {
+        if (!hold.btn || (n === 'pointerleave' && ev.target !== hold.btn)) return;
+        stopHold();
+        hold.btn = null;
+      }, true);
+    });
+    root.addEventListener('contextmenu', function (ev) { if (ev.target.closest && ev.target.closest('.stepper__btn')) ev.preventDefault(); });
+    /* keyboard activation of a stepper button (Enter/Space) arrives as a click with detail 0 */
+    root.addEventListener('click', function (ev) {
+      var el = ev.target.closest && ev.target.closest('[data-action="step"]');
+      if (el && ev.detail === 0 && !el.disabled) stepField(el.getAttribute('data-fid'), +el.getAttribute('data-step'));
+    });
+
+    /* drag & drop onto the drop zone (desktop) */
+    root.addEventListener('dragover', function (ev) {
+      var z = ev.target.closest && ev.target.closest('.uploader__drop, .sc-add-tile');
+      if (!z || isPreview()) return;
+      ev.preventDefault();
+      z.classList.add('is-dragover');
+    });
+    root.addEventListener('dragleave', function (ev) {
+      var z = ev.target.closest && ev.target.closest('.uploader__drop, .sc-add-tile');
+      if (z) z.classList.remove('is-dragover');
+    });
+    root.addEventListener('drop', function (ev) {
+      var z = ev.target.closest && ev.target.closest('.uploader__drop, .sc-add-tile');
+      if (!z || isPreview()) return;
+      ev.preventDefault();
+      z.classList.remove('is-dragover');
+      var inp = z.querySelector('input[type="file"]');
+      if (inp && ev.dataTransfer && ev.dataTransfer.files) addFiles(inp.getAttribute('data-fid'), ev.dataTransfer.files);
+    });
+
+    /* keep the draft on tab switches / page hide; warn while photos upload */
+    doc.addEventListener('visibilitychange', function () { if (doc.visibilityState === 'hidden') saveDraftSoon.flush(); });
+    window.addEventListener('pagehide', function () { saveDraftSoon.flush(); });
+    window.addEventListener('beforeunload', function (ev) {
+      if (uploadsPending() || S.submitting) { ev.preventDefault(); ev.returnValue = ''; return ''; }
+      return undefined;
+    });
+    window.addEventListener('offline', function () { App.toast('انقطع الاتصال بالإنترنت — ما تكتبه محفوظ على جهازك.', 'info', 5000); });
+    window.addEventListener('online', function () { App.toast('عاد الاتصال بالإنترنت.', 'ok'); });
+
+    /* deadline chip stays current while the page is open */
+    setInterval(function () {
+      if (!S.form || !S.form.ok || (S.view !== 'form' && S.view !== 'offday')) return;
+      var chip = doc.getElementById('sc-chip');
+      if (chip && doc.getElementById('sc-dl')) App.render(chip, deadlineChipHtml());
+    }, 30000);
+
+    /* ================================================================ BOOT */
+    function start() {
+      if (BOOT.page !== 'school') {
+        S.viewError = { code: 'ERROR', error: 'تعذّر تحميل الصفحة. حدّث الصفحة وحاول مرة أخرى.' };
+        setView('error');
+        return;
+      }
+      if (S.mode === 'picker') {
+        if (!S.picker || !S.picker.ok) {
+          S.viewError = S.picker || { code: 'ERROR' };
+          setView('error');
+          return;
+        }
+        setView('picker');
+        return;
+      }
+      S.token = str(BOOT.token);
+      var form = BOOT.form;
+      if (!form || !form.ok) {
+        S.viewError = form || { code: 'ERROR' };
+        setView('error');
+        return;
+      }
+      if (!form.preview) pruneOldDrafts();
+      loadForm(form, { noScroll: true });
+    }
+    try {
+      start();
+    } catch (err) {
+      try { console.warn('[nabd] start failed', err); } catch (e) { /* ignore */ }
+      root.innerHTML = '';
+      S.viewError = { code: 'ERROR', error: 'تعذّر عرض الصفحة. حدّث الصفحة وحاول مرة أخرى.' };
+      try { setView('error'); } catch (e2) { root.textContent = 'تعذّر عرض الصفحة. حدّث الصفحة وحاول مرة أخرى.'; }
+    }
+  })();
+  </script>
+</body>
+</html>

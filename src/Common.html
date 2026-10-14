@@ -1,0 +1,1705 @@
+<script>
+/* =============================================================================
+   نبض المدارس — shared client helpers (spec §7.2)
+   Defines the global `App` object used by School.html and Admin.html.
+   Classic script (no modules): pages run their own code after this include.
+   ========================================================================== */
+(function (global) {
+  'use strict';
+
+  var doc = global.document;
+  var TZ = 'Asia/Riyadh';
+  var App = {};
+
+  /* --------------------------------------------------------------- utils */
+  function isFn(x) { return typeof x === 'function'; }
+  function isNum(x) { return typeof x === 'number' && isFinite(x); }
+  function toNum(x) {
+    if (x === null || x === undefined || x === '' || typeof x === 'boolean') return null;
+    var n = typeof x === 'number' ? x : Number(String(x).replace(/,/g, ''));
+    return isFinite(n) ? n : null;
+  }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function round1(v) { return Math.round(v * 10) / 10; }
+  var uidN = 0;
+  function uid(p) { uidN += 1; return (p || 'nabd') + '-' + uidN + '-' + Math.random().toString(36).slice(2, 7); }
+  function resolveEl(x) {
+    if (!x) return null;
+    if (typeof x === 'string') return doc.querySelector(x);
+    return x.nodeType === 1 ? x : null;
+  }
+  var AR_DIGITS = /[٠-٩۰-۹]/g;
+  function latinDigits(s) {
+    return String(s).replace(AR_DIGITS, function (d) {
+      var c = d.charCodeAt(0);
+      return String(c >= 0x06F0 ? c - 0x06F0 : c - 0x0660);
+    });
+  }
+  App.uid = uid;
+  App.latinDigits = latinDigits;
+
+  /* ------------------------------------------------------ safe HTML (XSS) */
+  function SafeHtml(html) { this.__html = String(html); }
+  SafeHtml.prototype.toString = function () { return this.__html; };
+  SafeHtml.prototype.toJSON = function () { return this.__html; };
+  App.SafeHtml = SafeHtml;
+
+  var ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' };
+  function esc(s) {
+    if (s === null || s === undefined) return '';
+    return String(s).replace(/[&<>"'`]/g, function (c) { return ESC_MAP[c]; });
+  }
+  // Interpolations that open a URL-bearing attribute get scheme-checked too.
+  var URL_ATTR_TAIL = /(?:^|[\s"'])(?:href|src|action|formaction|poster|xlink:href|srcset)\s*=\s*["']?\s*$/i;
+  function safeUrl(u) {
+    var s = String(u);
+    var probe = s.replace(/[\u0000- \u007F-\u009F]/g, '').toLowerCase();
+    if (/^(javascript|vbscript):/.test(probe)) return 'about:blank';
+    if (/^data:/.test(probe) && !/^data:image\/(png|jpe?g|gif|webp|avif);/.test(probe)) return 'about:blank';
+    return s;
+  }
+  function interp(v, urlCtx) {
+    if (v === null || v === undefined || v === false) return '';
+    if (v instanceof SafeHtml) return v.__html;
+    if (Array.isArray(v)) {
+      var out = '';
+      for (var i = 0; i < v.length; i++) out += interp(v[i], false);
+      return out;
+    }
+    var s = String(v);
+    return esc(urlCtx ? safeUrl(s) : s);
+  }
+  App.html = function (strings) {
+    if (!strings || !strings.raw) return new SafeHtml(esc(strings)); // called as a function by mistake
+    var out = strings[0];
+    for (var i = 1; i < strings.length; i++) {
+      out += interp(arguments[i], URL_ATTR_TAIL.test(strings[i - 1])) + strings[i];
+    }
+    return new SafeHtml(out);
+  };
+  App.raw = function (str) { return new SafeHtml(str === null || str === undefined ? '' : String(str)); };
+  App.esc = esc;
+  App.isSafe = function (x) { return x instanceof SafeHtml; };
+  App.render = function (el, content) {
+    var node = resolveEl(el);
+    if (!node) return null;
+    node.innerHTML = toHtml(content);
+    return node;
+  };
+  function toHtml(content) {
+    if (content instanceof SafeHtml) return content.__html;
+    if (Array.isArray(content)) return interp(content, false);
+    return esc(content === null || content === undefined ? '' : content);
+  }
+  App.$ = function (sel, root) { return (root || doc).querySelector(sel); };
+  App.$$ = function (sel, root) { return Array.prototype.slice.call((root || doc).querySelectorAll(sel)); };
+
+  /* ---------------------------------------------------------------- icons
+     24×24, stroke = currentColor, 1.8 width, round caps/joins. Directional
+     glyphs (send, logout, undo) are drawn for right-to-left reading. */
+  var ICONS = {
+    'home': '<path d="M3.5 10.6 12 3.8l8.5 6.8"/><path d="M5.6 9v10.2c0 .44.36.8.8.8H10v-5.2c0-.44.36-.8.8-.8h2.4c.44 0 .8.36.8.8V20h3.6c.44 0 .8-.36.8-.8V9"/>',
+    'school': '<path d="M2.5 20.5h19"/><path d="M4.5 20.5v-9.8L12 6.6l7.5 4.1v9.8"/><path d="M10 20.5v-3.7a2 2 0 0 1 4 0v3.7"/><path d="M12 6.6V2.8h3.6l-1 1.25 1 1.25H12"/><path d="M7.6 12.6h1.8M14.6 12.6h1.8"/>',
+    'chart': '<path d="M4 3.8v15.4c0 .44.36.8.8.8h15.4"/><path d="M8.5 16.5v-4M12.5 16.5V8M16.5 16.5v-6.5"/>',
+    'form': '<rect x="5" y="4.5" width="14" height="16.5" rx="2.2"/><rect x="8.6" y="2.6" width="6.8" height="3.8" rx="1.2"/><path d="M8.6 11h6.8M8.6 14.5h6.8M8.6 18h4"/>',
+    'settings': '<path d="M10.08 4.85 10.5 2.52a9.6 9.6 0 0 1 3 0l.42 2.33a7.4 7.4 0 0 1 1.78.74l1.94-1.36a9.6 9.6 0 0 1 2.13 2.13L18.41 8.3a7.4 7.4 0 0 1 .74 1.78l2.33.42a9.6 9.6 0 0 1 0 3l-2.33.42a7.4 7.4 0 0 1-.74 1.78l1.36 1.94a9.6 9.6 0 0 1-2.13 2.13l-1.94-1.36a7.4 7.4 0 0 1-1.78.74l-.42 2.33a9.6 9.6 0 0 1-3 0l-.42-2.33a7.4 7.4 0 0 1-1.78-.74l-1.94 1.36a9.6 9.6 0 0 1-2.13-2.13l1.36-1.94a7.4 7.4 0 0 1-.74-1.78L2.52 13.5a9.6 9.6 0 0 1 0-3l2.33-.42a7.4 7.4 0 0 1 .74-1.78L4.23 6.36a9.6 9.6 0 0 1 2.13-2.13L8.3 5.59a7.4 7.4 0 0 1 1.78-.74z"/><circle cx="12" cy="12" r="3"/>',
+    'check': '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+    'x': '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+    'clock': '<circle cx="12" cy="12" r="8.8"/><path d="M12 7.4V12l3 1.9"/>',
+    'alert': '<path d="M10.3 4.3 2.9 17.4a2 2 0 0 0 1.7 3h14.8a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9.4v4.2M12 16.9h.01"/>',
+    'whatsapp': '<path d="M4.74 15.95A8.5 8.5 0 1 1 8.11 19.21L3.4 20.6z"/><path d="M9.1 8.3c.25-.27.55-.3.8-.08l1.05 1.3c.2.25.2.6-.02.84l-.5.55c.45 1.1 1.3 1.95 2.38 2.4l.55-.5c.24-.22.6-.23.85-.03l1.3 1.04c.23.25.2.56-.07.81-.55.52-1.27.77-2.02.56-2.1-.6-3.75-2.24-4.35-4.34-.21-.75.04-1.47.56-2.02z"/>',
+    'copy': '<rect x="8.5" y="8.5" width="12" height="12" rx="2.2"/><path d="M15.5 8.5V5.7a2.2 2.2 0 0 0-2.2-2.2H5.7a2.2 2.2 0 0 0-2.2 2.2v7.6a2.2 2.2 0 0 0 2.2 2.2h2.8"/>',
+    'link': '<path d="M10.2 13.8a4.3 4.3 0 0 0 6.1 0l3.1-3.1a4.3 4.3 0 0 0-6.1-6.1l-1.2 1.2"/><path d="M13.8 10.2a4.3 4.3 0 0 0-6.1 0l-3.1 3.1a4.3 4.3 0 0 0 6.1 6.1l1.2-1.2"/>',
+    'qr': '<rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.3"/><rect x="14" y="3.5" width="6.5" height="6.5" rx="1.3"/><rect x="3.5" y="14" width="6.5" height="6.5" rx="1.3"/><path d="M6.75 6.75h.01M17.25 6.75h.01M6.75 17.25h.01"/><path d="M14 14h2.6v2.6H14zM20.5 14v.01M17.9 17.9h2.6v2.6h-2.6zM14 20.5v.01"/>',
+    'edit': '<path d="M4 20h3.6L18.4 9.2a2.3 2.3 0 0 0 0-3.2l-.4-.4a2.3 2.3 0 0 0-3.2 0L4 16.4V20z"/><path d="M13.3 7.1l3.6 3.6"/>',
+    'trash': '<path d="M4 6.8h16"/><path d="M9.2 6.8V4.6c0-.44.36-.8.8-.8h4c.44 0 .8.36.8.8v2.2"/><path d="M6 6.8l.95 12.3a2 2 0 0 0 2 1.85h6.1a2 2 0 0 0 2-1.85L18 6.8"/><path d="M10 11v5.5M14 11v5.5"/>',
+    'plus': '<path d="M12 5v14M5 12h14"/>',
+    'minus': '<path d="M5 12h14"/>',
+    'refresh': '<path d="M19.6 10.2A7.8 7.8 0 0 0 5.9 7.1L4.4 8.8"/><path d="M4.4 4.4v4.4h4.4"/><path d="M4.4 13.8a7.8 7.8 0 0 0 13.7 3.1l1.5-1.7"/><path d="M19.6 19.6v-4.4h-4.4"/>',
+    'logout': '<path d="M14.5 4H18a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3.5"/><path d="M9.5 8l-4 4 4 4"/><path d="M5.5 12h9.5"/>',
+    'chevron-left': '<path d="M14.5 6l-6 6 6 6"/>',
+    'chevron-right': '<path d="M9.5 6l6 6-6 6"/>',
+    'chevron-down': '<path d="M6 9.5l6 6 6-6"/>',
+    'chevron-up': '<path d="M6 14.5l6-6 6 6"/>',
+    'calendar': '<rect x="3.5" y="5" width="17" height="15.5" rx="2.4"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 17.2h.01M12 17.2h.01"/>',
+    'mail': '<rect x="3" y="5" width="18" height="14" rx="2.4"/><path d="M3.6 6.6l8.4 6 8.4-6"/>',
+    'lock': '<rect x="4.5" y="10.5" width="15" height="10" rx="2.4"/><path d="M8 10.5V7.6a4 4 0 0 1 8 0v2.9"/><path d="M12 14.3v2.4"/>',
+    'user': '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>',
+    'users': '<circle cx="9.5" cy="8.3" r="3.6"/><path d="M2.8 20a6.7 6.7 0 0 1 13.4 0"/><path d="M15.6 4.9a3.6 3.6 0 0 1 0 6.8"/><path d="M18.4 14.1a6.7 6.7 0 0 1 2.8 5.9"/>',
+    'print': '<path d="M7 9V3.6h10V9"/><rect x="3.5" y="9" width="17" height="8.2" rx="2.2"/><path d="M7 14h10v6.4H7z"/><path d="M16.8 12h.01"/>',
+    'download': '<path d="M12 3.8v11.4"/><path d="M7.4 10.8 12 15.4l4.6-4.6"/><path d="M4.5 19.8h15"/>',
+    'upload': '<path d="M12 15.6V4.2"/><path d="M7.4 8.8 12 4.2l4.6 4.6"/><path d="M4.5 19.8h15"/>',
+    'sheet': '<rect x="4" y="3.5" width="16" height="17" rx="2.2"/><path d="M4 9h16M4 14.6h16M10 9v11.5"/>',
+    'eye': '<path d="M2.6 12S6 5.6 12 5.6 21.4 12 21.4 12 18 18.4 12 18.4 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="3"/>',
+    'eye-off': '<path d="M9.9 5.8A9.7 9.7 0 0 1 12 5.6c6 0 9.4 6.4 9.4 6.4a16.8 16.8 0 0 1-2.6 3.4M6.6 6.9A16 16 0 0 0 2.6 12S6 18.4 12 18.4a9.3 9.3 0 0 0 4.9-1.4"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="M3.5 3.5l17 17"/>',
+    'info': '<circle cx="12" cy="12" r="8.8"/><path d="M12 11v5.4M12 7.7h.01"/>',
+    'sparkle': '<path d="M11 3.6l1.6 4.6a2.2 2.2 0 0 0 1.4 1.4l4.6 1.6-4.6 1.6a2.2 2.2 0 0 0-1.4 1.4L11 18.8l-1.6-4.6A2.2 2.2 0 0 0 8 12.8L3.4 11.2 8 9.6a2.2 2.2 0 0 0 1.4-1.4z"/><path d="M18.6 15.6v4.8M16.2 18h4.8"/>',
+    'arrow-up': '<path d="M12 19.5v-15"/><path d="M6 10.5l6-6 6 6"/>',
+    'arrow-down': '<path d="M12 4.5v15"/><path d="M6 13.5l6 6 6-6"/>',
+    'send': '<path d="M21.2 3 2.8 11.1a1 1 0 0 0 0 1.8L21.2 21l-2.7-9z"/><path d="M18.5 12h-7"/>',
+    'pulse': '<path d="M2.5 12.5h3.8l2.3-5.3 4.2 10.6 2.8-6.6 1.4 1.3h4.5"/>',
+    'camera': '<path d="M4 8.4a2.2 2.2 0 0 1 2.2-2.2h1.7l1.5-2.1h5.2l1.5 2.1h1.7A2.2 2.2 0 0 1 20 8.4v9.4a2.2 2.2 0 0 1-2.2 2.2H6.2A2.2 2.2 0 0 1 4 17.8z"/><circle cx="12" cy="12.8" r="3.6"/>',
+    'image': '<rect x="3.5" y="4.5" width="17" height="15" rx="2.4"/><circle cx="9" cy="9.8" r="1.7"/><path d="M20.5 15.6l-4.6-4.6L6.2 19.5"/>',
+    'inbox': '<path d="M3.5 13.2h5l1.6 2.6h3.8l1.6-2.6h5"/><path d="M5.7 5.6 3.5 13.2v5a2.2 2.2 0 0 0 2.2 2.2h12.6a2.2 2.2 0 0 0 2.2-2.2v-5l-2.2-7.6A2.2 2.2 0 0 0 16.2 4H7.8a2.2 2.2 0 0 0-2.1 1.6z"/>',
+    'check-double': '<path d="M2.5 12.6l4.4 4.4L16 7.6"/><path d="M12.2 16.4l.6.6 9-9.4"/>',
+    'undo': '<path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
+    'key': '<circle cx="7.8" cy="15.6" r="4.4"/><path d="M11 12.4 19.8 3.6"/><path d="M16.6 6.8l2.6 2.6M14.2 9.2l2 2"/>',
+    'book': '<path d="M12 6.6C10.2 5 7.4 4.3 3.5 4.6v13.6c3.9-.3 6.7.4 8.5 2 1.8-1.6 4.6-2.3 8.5-2V4.6c-3.9-.3-6.7.4-8.5 2z"/><path d="M12 6.6v13.6"/>',
+    'folder': '<path d="M3.5 7.2A2.2 2.2 0 0 1 5.7 5h3.8l2.1 2.5h6.7a2.2 2.2 0 0 1 2.2 2.2v8.1a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2z"/>',
+    'search': '<circle cx="10.8" cy="10.8" r="6.6"/><path d="M20 20l-4.4-4.4"/>',
+    'phone': '<path d="M6.6 3.6h2.2c.5 0 .9.33 1 .8l.75 3.25a1 1 0 0 1-.4 1.06l-1.6 1.1a11.3 11.3 0 0 0 5.6 5.6l1.1-1.6a1 1 0 0 1 1.06-.4l3.25.75c.47.11.8.5.8 1v2.2a2 2 0 0 1-2.1 2A16.5 16.5 0 0 1 4.6 5.7a2 2 0 0 1 2-2.1z"/>',
+    'external': '<path d="M13.5 4h6.5v6.5"/><path d="M20 4l-8.5 8.5"/><path d="M18 14.2v3.6a2.2 2.2 0 0 1-2.2 2.2H6.2A2.2 2.2 0 0 1 4 17.8V8.2A2.2 2.2 0 0 1 6.2 6h3.6"/>',
+    'shield': '<path d="M12 3l7.5 2.9v5.6c0 4.5-3.1 8.2-7.5 9.5-4.4-1.3-7.5-5-7.5-9.5V5.9z"/><path d="M8.8 12.2l2.2 2.2 4.2-4.4"/>',
+    'bell': '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.8h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/>',
+    'wifi-off': '<path d="M3.5 3.5l17 17"/><path d="M8.6 15.6a5 5 0 0 1 6.1-.6M5.3 12.3A9.6 9.6 0 0 1 9 10.1M2.5 9a13.6 13.6 0 0 1 3.5-2.3M14.7 10.4a9.6 9.6 0 0 1 4 1.9M11.3 6.1A13.7 13.7 0 0 1 21.5 9"/><path d="M12 19h.01"/>',
+    'filter': '<path d="M4 5h16l-6.2 7.4v5.4l-3.6 1.8v-7.2z"/>',
+    'grid': '<rect x="4" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.4"/>',
+    'list': '<path d="M9 6.5h11M9 12h11M9 17.5h11"/><path d="M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01"/>',
+    'menu': '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    'more': '<circle cx="5.5" cy="12" r="1.25" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.25" fill="currentColor" stroke="none"/>',
+    'star': '<path d="M12 3.6l2.6 5.3 5.8.85-4.2 4.1 1 5.8L12 16.9l-5.2 2.75 1-5.8-4.2-4.1 5.8-.85z"/>',
+    'flag': '<path d="M5 21V4"/><path d="M5 4.5h11.5l-2 4 2 4H5"/>',
+    'hourglass': '<path d="M6.5 3.5h11M6.5 20.5h11"/><path d="M7.5 3.5c0 4.2 4.5 5.4 4.5 8.5S7.5 16.3 7.5 20.5M16.5 3.5c0 4.2-4.5 5.4-4.5 8.5s4.5 4.3 4.5 8.5"/>',
+    'zoom-in': '<circle cx="10.8" cy="10.8" r="6.6"/><path d="M20 20l-4.4-4.4M10.8 8.2v5.2M8.2 10.8h5.2"/>'
+  };
+  App.icons = Object.keys(ICONS);
+  App.icon = function (name, size) {
+    var body = ICONS[name] || ICONS.info;
+    var hasSize = size !== undefined && size !== null && size !== '';
+    var px = hasSize ? (isNum(+size) ? (+size) + 'px' : String(size)) : '20';
+    var dim = hasSize ? String(px).replace(/px$/, '') : '20';
+    var style = hasSize ? ' style="width:' + esc(px) + ';height:' + esc(px) + '"' : '';
+    return new SafeHtml(
+      '<svg class="icon icon-' + esc(name) + '" width="' + esc(dim) + '" height="' + esc(dim) + '"' + style +
+      ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"' +
+      ' stroke-linejoin="round" aria-hidden="true" focusable="false">' + body + '</svg>'
+    );
+  };
+
+  /* -------------------------------------------------------- server calls */
+  function mkErr(message, code, detail) {
+    var e = new Error(message);
+    e.code = code || 'ERROR';
+    if (detail !== undefined) e.detail = detail;
+    return e;
+  }
+  var MSG = {
+    network: 'تعذّر الاتصال بالإنترنت. تحقّق من الاتصال ثم حاول مرة أخرى.',
+    timeout: 'استغرقت العملية وقتًا أطول من المعتاد. حاول مرة أخرى بعد قليل.',
+    busy: 'الخدمة مشغولة حاليًا. انتظر قليلًا ثم حاول مرة أخرى.',
+    perm: 'يحتاج النظام إلى إذن من صاحب النسخة لإتمام هذه العملية. تواصل مع المشرف.',
+    unknown: 'حدث خطأ غير متوقع. حاول مرة أخرى بعد قليل.',
+    noRuntime: 'لا تعمل هذه الصفحة إلا من رابط النظام الأصلي. افتح الرابط الذي وصلك.'
+  };
+  function normalizeError(err) {
+    var raw = '';
+    if (err && typeof err === 'object' && err.message !== undefined) raw = String(err.message);
+    else if (err !== undefined && err !== null) raw = String(err);
+    var msg = raw;
+    for (var i = 0; i < 3; i++) msg = msg.replace(/^\s*(?:ScriptError|Exception|Error|TypeError|ReferenceError|InternalError)\s*:\s*/i, '');
+    msg = msg.trim();
+    if (/AUTH_REQUIRED/.test(msg)) return mkErr('AUTH_REQUIRED', 'AUTH_REQUIRED', raw);
+    if (/NOT_SETUP/.test(msg)) return mkErr('NOT_SETUP', 'NOT_SETUP', raw);
+    if (/[؀-ۿ]/.test(msg)) return mkErr(msg, 'SERVER', raw);
+    if (/NetworkError|HTTP 0|Failed to fetch|network|connection|Load failed|offline/i.test(msg)) return mkErr(MSG.network, 'NETWORK', raw);
+    if (/maximum execution time|timed? ?out|deadline/i.test(msg)) return mkErr(MSG.timeout, 'TIMEOUT', raw);
+    if (/too many|invoked too many|rate limit|quota|simultaneous|Lock/i.test(msg)) return mkErr(MSG.busy, 'BUSY', raw);
+    if (/authori[sz]ation|permission|not authorized|access denied/i.test(msg)) return mkErr(MSG.perm, 'PERMISSION', raw);
+    return mkErr(MSG.unknown, 'UNKNOWN', raw);
+  }
+  App.normalizeError = normalizeError;
+
+  App.call = function (fnName) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    while (args.length && args[args.length - 1] === undefined) args.pop();
+    for (var i = 0; i < args.length; i++) if (args[i] === undefined) args[i] = null;
+    return new Promise(function (resolve, reject) {
+      var gs = global.google && global.google.script && global.google.script.run;
+      if (!gs) { reject(mkErr(MSG.noRuntime, 'NO_RUNTIME')); return; }
+      var runner = gs
+        .withSuccessHandler(function (res) { resolve(res === undefined ? null : res); })
+        .withFailureHandler(function (err) {
+          var e = normalizeError(err);
+          e.fn = fnName;
+          if (e.code === 'AUTH_REQUIRED') {
+            try { global.dispatchEvent(new CustomEvent('app:auth-required', { detail: { fn: fnName } })); } catch (ignore) { /* old browsers */ }
+          }
+          reject(e);
+        });
+      if (!isFn(runner[fnName])) { reject(mkErr(MSG.unknown, 'NO_FUNCTION', 'Unknown server function: ' + fnName)); return; }
+      try { runner[fnName].apply(runner, args); } catch (ex) { reject(normalizeError(ex)); }
+    });
+  };
+
+  /* --------------------------------------------------------------- dates */
+  var ISO_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+  var DAY_NAMES = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+  var G_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+  var H_MONTHS = ['محرم', 'صفر', 'ربيع الأول', 'ربيع الآخر', 'جمادى الأولى', 'جمادى الآخرة', 'رجب', 'شعبان', 'رمضان', 'شوال', 'ذو القعدة', 'ذو الحجة'];
+  function parseISO(iso) {
+    var m = ISO_RE.exec(String(iso || '').slice(0, 10));
+    if (!m) return null;
+    var y = +m[1], mo = +m[2], d = +m[3];
+    var t = Date.UTC(y, mo - 1, d);
+    var dt = new Date(t);
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+    return { y: y, m: mo, d: d, t: t };
+  }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function isoFromUTC(t) {
+    var dt = new Date(t);
+    return dt.getUTCFullYear() + '-' + pad2(dt.getUTCMonth() + 1) + '-' + pad2(dt.getUTCDate());
+  }
+  var riyadhFmt = null;
+  try {
+    riyadhFmt = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  } catch (e) { riyadhFmt = null; }
+  function riyadhParts(date) {
+    var d = date || new Date();
+    if (riyadhFmt && riyadhFmt.formatToParts) {
+      try {
+        var p = {};
+        riyadhFmt.formatToParts(d).forEach(function (x) { p[x.type] = x.value; });
+        var h = +p.hour % 24;
+        return { iso: p.year + '-' + p.month + '-' + p.day, time: pad2(h) + ':' + p.minute };
+      } catch (e) { /* fall through */ }
+    }
+    // Saudi Arabia observes UTC+3 all year (no DST).
+    var t = new Date(d.getTime() + 3 * 3600 * 1000);
+    return { iso: isoFromUTC(t.getTime()), time: pad2(t.getUTCHours()) + ':' + pad2(t.getUTCMinutes()) };
+  }
+
+  var hijriFmt = null;
+  try {
+    var hf = new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura-nu-latn', { timeZone: 'UTC', day: 'numeric', month: 'numeric', year: 'numeric' });
+    if (/islamic/.test(hf.resolvedOptions().calendar || '')) hijriFmt = hf;
+  } catch (e) { hijriFmt = null; }
+  // Fallback: tabular (civil) Islamic calendar — within ±1 day of Umm al-Qura.
+  function hijriTabular(t) {
+    var jd = Math.floor(t / 86400000) + 2440588; // Julian day number at 00:00 UTC (noon-based, floor)
+    var l = jd - 1948440 + 10632;
+    var n = Math.floor((l - 1) / 10631);
+    l = l - 10631 * n + 354;
+    var j = Math.floor((10985 - l) / 5316) * Math.floor((50 * l) / 17719) + Math.floor(l / 5670) * Math.floor((43 * l) / 15238);
+    l = l - Math.floor((30 - j) / 15) * Math.floor((17719 * j) / 50) - Math.floor(j / 16) * Math.floor((15238 * j) / 43) + 29;
+    var m = Math.floor((24 * l) / 709);
+    var d = l - Math.floor((709 * m) / 24);
+    var y = 30 * n + j - 30;
+    return { d: d, m: m, y: y };
+  }
+  function hijriParts(iso) {
+    var p = parseISO(iso);
+    if (!p) return null;
+    if (hijriFmt && hijriFmt.formatToParts) {
+      try {
+        var out = {};
+        hijriFmt.formatToParts(new Date(p.t + 12 * 3600 * 1000)).forEach(function (x) {
+          if (x.type === 'day' || x.type === 'month' || x.type === 'year') out[x.type] = parseInt(latinDigits(x.value), 10);
+        });
+        if (out.day && out.month && out.year) return { d: out.day, m: out.month, y: out.year };
+      } catch (e) { /* fall through */ }
+    }
+    return hijriTabular(p.t + 12 * 3600 * 1000);
+  }
+
+  App.date = {
+    today: function () { return riyadhParts().iso; },
+    now: function () { return riyadhParts().time; },
+    isISO: function (s) { return !!parseISO(s); },
+    add: function (iso, n) {
+      var p = parseISO(iso);
+      if (!p) return '';
+      return isoFromUTC(Date.UTC(p.y, p.m - 1, p.d + (Math.round(+n) || 0)));
+    },
+    diff: function (a, b) { // whole days from a to b
+      var pa = parseISO(a), pb = parseISO(b);
+      return pa && pb ? Math.round((pb.t - pa.t) / 86400000) : NaN;
+    },
+    weekday: function (iso) {
+      var p = parseISO(iso);
+      return p ? new Date(p.t).getUTCDay() : -1;
+    },
+    dayName: function (iso) {
+      var w = App.date.weekday(iso);
+      return w >= 0 ? DAY_NAMES[w] : '';
+    },
+    dayNames: DAY_NAMES.slice(),
+    hijri: function (iso, opts) {
+      var h = hijriParts(iso);
+      if (!h) return '';
+      var withYear = !(opts && opts.withYear === false);
+      return h.d + ' ' + H_MONTHS[h.m - 1] + (withYear ? ' ' + h.y + 'هـ' : '');
+    },
+    greg: function (iso, opts) {
+      var p = parseISO(iso);
+      if (!p) return '';
+      var withYear = !(opts && opts.withYear === false);
+      return p.d + ' ' + G_MONTHS[p.m - 1] + (withYear ? ' ' + p.y : '');
+    },
+    full: function (iso) {
+      if (!parseISO(iso)) return '';
+      return App.date.dayName(iso) + ' ' + App.date.hijri(iso) + ' — ' + App.date.greg(iso);
+    },
+    short: function (iso) { // axis labels: 14/10
+      var p = parseISO(iso);
+      return p ? p.d + '/' + p.m : '';
+    },
+    startOfWeek: function (iso) { // Sunday-based school week
+      var w = App.date.weekday(iso);
+      return w < 0 ? '' : App.date.add(iso, -w);
+    },
+    startOfMonth: function (iso) {
+      var p = parseISO(iso);
+      return p ? p.y + '-' + pad2(p.m) + '-01' : '';
+    }
+  };
+
+  App.time = {
+    fmt: function (s) {
+      var m = /(\d{1,2}):(\d{2})/.exec(latinDigits(String(s || '')));
+      if (!m) return '';
+      var h = +m[1];
+      if (h > 23 || +m[2] > 59) return '';
+      var suffix = h < 12 ? 'ص' : 'م';
+      var h12 = h % 12 === 0 ? 12 : h % 12;
+      return h12 + ':' + m[2] + ' ' + suffix;
+    }
+  };
+
+  /* ------------------------------------------------------------- numbers */
+  var nf1 = null;
+  try { nf1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }); } catch (e) { nf1 = null; }
+  App.fmt = {
+    num: function (n) {
+      var v = toNum(n);
+      if (v === null) return '—';
+      return nf1 ? nf1.format(v) : String(round1(v));
+    },
+    pct: function (x) {
+      var v = toNum(x);
+      if (v === null) return '—';
+      return App.fmt.num(round1(v)) + '٪';
+    }
+  };
+
+  /* -------------------------------------------------------------- status */
+  var STATUS = {
+    pending: { label: 'بانتظار المراجعة', cls: 'badge--pending', icon: 'clock' },
+    approved: { label: 'معتمد', cls: 'badge--ok', icon: 'check' },
+    returned: { label: 'معاد للتصحيح', cls: 'badge--danger', icon: 'undo' },
+    missing: { label: 'لم يُرسل', cls: 'badge--muted', icon: 'minus' }
+  };
+  var STATUS_AR = { 'بانتظار المراجعة': 'pending', 'معتمد': 'approved', 'معاد للتصحيح': 'returned', 'لم يُرسل': 'missing', 'لم يرسل': 'missing' };
+  function statusKey(s) {
+    if (s === null || s === undefined || s === '') return 'missing';
+    var k = String(s).trim();
+    return STATUS[k] ? k : (STATUS_AR[k] || '');
+  }
+  App.status = {
+    key: statusKey,
+    label: function (s) { var k = statusKey(s); return k ? STATUS[k].label : ''; },
+    badge: function (s) {
+      var k = statusKey(s);
+      if (!k) return new SafeHtml('');
+      var st = STATUS[k];
+      return App.html`<span class="badge ${st.cls}" data-status="${k}">${App.icon(st.icon)}<span>${st.label}</span></span>`;
+    }
+  };
+
+  /* -------------------------------------------------------------- toasts */
+  var toastHost = null;
+  function ensureToastHost() {
+    if (toastHost && doc.body.contains(toastHost)) return toastHost;
+    toastHost = doc.createElement('div');
+    toastHost.className = 'toast-host';
+    toastHost.setAttribute('aria-live', 'polite');
+    toastHost.setAttribute('aria-atomic', 'false');
+    doc.body.appendChild(toastHost);
+    return toastHost;
+  }
+  var TOAST_ICON = { ok: 'check', danger: 'alert', info: 'info', warn: 'alert' };
+  App.toast = function (msg, type, ms) {
+    if (!doc.body) return null;
+    var kind = TOAST_ICON[type] ? type : (type === 'error' ? 'danger' : (type === undefined ? 'ok' : 'info'));
+    var dur = isNum(ms) ? ms : (kind === 'danger' ? 5200 : 3200);
+    var host = ensureToastHost();
+    var el = doc.createElement('div');
+    el.className = 'toast toast--' + kind;
+    el.setAttribute('role', kind === 'danger' ? 'alert' : 'status');
+    el.innerHTML = '<span class="toast__icon">' + App.icon(TOAST_ICON[kind]).__html + '</span><div class="toast__msg"></div>';
+    var msgEl = el.querySelector('.toast__msg');
+    if (msg instanceof SafeHtml) msgEl.innerHTML = msg.__html; else msgEl.textContent = msg === null || msg === undefined ? '' : String(msg);
+    host.appendChild(el);
+    while (host.children.length > 3) host.removeChild(host.firstChild);
+    var timer = null, closed = false;
+    function close() {
+      if (closed) return;
+      closed = true;
+      clearTimeout(timer);
+      el.classList.remove('is-in');
+      el.classList.add('is-out');
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 220);
+    }
+    function arm() { clearTimeout(timer); if (dur > 0) timer = setTimeout(close, dur); }
+    el.addEventListener('click', close);
+    el.addEventListener('pointerenter', function () { clearTimeout(timer); });
+    el.addEventListener('pointerleave', arm);
+    requestAnimationFrame(function () { requestAnimationFrame(function () { el.classList.add('is-in'); }); });
+    arm();
+    return { el: el, close: close };
+  };
+
+  /* -------------------------------------------------------------- modals */
+  var modalStack = [];
+  var scrollLocks = 0;
+  function lockScroll() {
+    scrollLocks += 1;
+    if (scrollLocks === 1) doc.documentElement.classList.add('is-modal-open');
+  }
+  function unlockScroll() {
+    scrollLocks = Math.max(0, scrollLocks - 1);
+    if (scrollLocks === 0) doc.documentElement.classList.remove('is-modal-open');
+  }
+  var FOCUSABLE = 'a[href], area[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), iframe, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+  function focusables(root) {
+    return Array.prototype.filter.call(root.querySelectorAll(FOCUSABLE), function (n) {
+      if (n.closest('[inert]')) return false;
+      return !!(n.offsetWidth || n.offsetHeight || n.getClientRects().length);
+    });
+  }
+  var reduceMotion = false;
+  try { reduceMotion = global.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { reduceMotion = false; }
+  function isSheet() { try { return global.matchMedia('(max-width: 639.98px)').matches; } catch (e) { return false; } }
+
+  App.modal = function (opts) {
+    var o = opts || {};
+    var size = o.size === 'lg' || o.size === 'sm' ? o.size : 'md';
+    var dismissible = o.dismissible !== false;
+    var prevFocus = doc.activeElement;
+    var titleId = uid('modal-title');
+
+    var backdrop = doc.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    var box = doc.createElement('div');
+    box.className = 'modal modal--' + size + (o.className ? ' ' + String(o.className) : '');
+    box.setAttribute('role', o.role === 'alertdialog' ? 'alertdialog' : 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-labelledby', titleId);
+    box.tabIndex = -1;
+    box.innerHTML =
+      '<div class="modal__grab" aria-hidden="true"></div>' +
+      '<div class="modal__head"><h2 class="modal__title" id="' + titleId + '"></h2>' +
+      (dismissible ? '<button type="button" class="btn btn-ghost btn-icon modal__close" data-modal-close aria-label="إغلاق">' + App.icon('x').__html + '</button>' : '') +
+      '</div><div class="modal__body"></div>';
+    var titleEl = box.querySelector('.modal__title');
+    if (o.title instanceof SafeHtml) titleEl.innerHTML = o.title.__html; else titleEl.textContent = o.title === undefined || o.title === null ? '' : String(o.title);
+    var bodyEl = box.querySelector('.modal__body');
+    var body = o.body;
+    if (body && body.nodeType) bodyEl.appendChild(body);
+    else if (body instanceof SafeHtml || Array.isArray(body)) bodyEl.innerHTML = toHtml(body);
+    else if (body !== undefined && body !== null && body !== '') {
+      var p = doc.createElement('p');
+      p.className = 'modal__text';
+      p.textContent = String(body);
+      bodyEl.appendChild(p);
+    }
+
+    var footEl = null;
+    var actions = Array.isArray(o.actions) ? o.actions : [];
+    var api = { el: box, body: bodyEl, foot: null, backdrop: backdrop, close: close, closed: false };
+    if (actions.length) {
+      footEl = doc.createElement('div');
+      footEl.className = 'modal__foot';
+      actions.forEach(function (a, idx) {
+        if (!a) return;
+        var b = doc.createElement('button');
+        b.type = 'button';
+        var kind = a.kind || (idx === 0 ? 'primary' : 'secondary');
+        b.className = 'btn btn-' + kind;
+        if (a.icon) b.innerHTML = App.icon(a.icon).__html;
+        var span = doc.createElement('span');
+        span.textContent = a.label === undefined ? '' : String(a.label);
+        b.appendChild(span);
+        if (a.autofocus) b.setAttribute('data-autofocus', '');
+        if (a.disabled) b.disabled = true;
+        b.addEventListener('click', function (ev) {
+          if (b.classList.contains('is-loading')) return;
+          var r = isFn(a.onClick) ? a.onClick(ev, api) : undefined;
+          if (r === false) return;
+          if (r && isFn(r.then)) {
+            App.busy(b, r).then(function (v) {
+              if (v !== false && a.close !== false) close('action');
+            }, function () { /* caller reports the error; keep the dialog open */ });
+            return;
+          }
+          if (a.close !== false) close('action');
+        });
+        footEl.appendChild(b);
+      });
+      box.appendChild(footEl);
+      api.foot = footEl;
+    }
+    backdrop.appendChild(box);
+
+    function onKey(ev) {
+      if (modalStack[modalStack.length - 1] !== api) return;
+      if (ev.key === 'Escape' || ev.key === 'Esc') {
+        if (dismissible) { ev.preventDefault(); ev.stopPropagation(); close('esc'); }
+        return;
+      }
+      if (ev.key === 'Tab') {
+        var f = focusables(box);
+        if (!f.length) { ev.preventDefault(); box.focus(); return; }
+        var first = f[0], last = f[f.length - 1];
+        var active = doc.activeElement;
+        if (ev.shiftKey && (active === first || active === box || !box.contains(active))) { ev.preventDefault(); last.focus(); }
+        else if (!ev.shiftKey && (active === last || !box.contains(active))) { ev.preventDefault(); first.focus(); }
+      }
+    }
+    function onFocusIn(ev) {
+      if (modalStack[modalStack.length - 1] !== api) return;
+      var t = ev.target;
+      if (!box.contains(t) && !(t.closest && (t.closest('.toast-host') || t.closest('[data-nabd-copy]')))) {
+        var f = focusables(box);
+        (f[0] || box).focus({ preventScroll: true });
+      }
+    }
+    var downOnBackdrop = false;
+    backdrop.addEventListener('pointerdown', function (ev) { downOnBackdrop = ev.target === backdrop; });
+    backdrop.addEventListener('click', function (ev) {
+      if (ev.target === backdrop && downOnBackdrop && dismissible && modalStack[modalStack.length - 1] === api) close('backdrop');
+      downOnBackdrop = false;
+    });
+    box.addEventListener('click', function (ev) {
+      var c = ev.target.closest && ev.target.closest('[data-modal-close]');
+      if (c && box.contains(c)) { ev.preventDefault(); close('close'); }
+    });
+
+    // Bottom-sheet drag-to-dismiss (phones): drag the header/handle down.
+    (function enableDrag() {
+      if (!dismissible) return;
+      var head = box.querySelector('.modal__head');
+      var startY = 0, dy = 0, dragging = false, t0 = 0;
+      head.addEventListener('pointerdown', function (ev) {
+        if (!isSheet() || ev.button !== 0 || (ev.target.closest && ev.target.closest('button, a, input, select, textarea'))) return;
+        dragging = true; startY = ev.clientY; dy = 0; t0 = Date.now();
+        box.classList.add('is-dragging');
+        try { head.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+      });
+      head.addEventListener('pointermove', function (ev) {
+        if (!dragging) return;
+        dy = Math.max(0, ev.clientY - startY);
+        box.style.transform = 'translateY(' + dy + 'px)';
+      });
+      function end() {
+        if (!dragging) return;
+        dragging = false;
+        box.classList.remove('is-dragging');
+        var fast = dy > 40 && (Date.now() - t0) < 250;
+        if (dy > 110 || fast) { close('swipe'); }
+        else { box.style.transform = ''; }
+      }
+      head.addEventListener('pointerup', end);
+      head.addEventListener('pointercancel', end);
+    })();
+
+    function close(reason) {
+      if (api.closed) return;
+      api.closed = true;
+      var i = modalStack.indexOf(api);
+      if (i >= 0) modalStack.splice(i, 1);
+      doc.removeEventListener('keydown', onKey, true);
+      doc.removeEventListener('focusin', onFocusIn, true);
+      backdrop.classList.remove('is-open');
+      box.style.transform = '';
+      var remove = function () { if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop); };
+      if (reduceMotion) remove(); else setTimeout(remove, 240);
+      unlockScroll();
+      var top = modalStack[modalStack.length - 1];
+      var target = prevFocus && doc.contains(prevFocus) && isFn(prevFocus.focus) ? prevFocus : (top ? top.el : null);
+      if (target) { try { target.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
+      if (isFn(o.onClose)) { try { o.onClose(reason || 'api'); } catch (e) { setTimeout(function () { throw e; }); } }
+    }
+
+    modalStack.push(api);
+    lockScroll();
+    doc.body.appendChild(backdrop);
+    doc.addEventListener('keydown', onKey, true);
+    doc.addEventListener('focusin', onFocusIn, true);
+    requestAnimationFrame(function () {
+      backdrop.classList.add('is-open');
+      var target = box.querySelector('[autofocus], [data-autofocus]') ||
+        bodyEl.querySelector('input:not([type="hidden"]):not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly]), select:not([disabled])');
+      try { (target || box).focus({ preventScroll: true }); } catch (e) { (target || box).focus(); }
+    });
+    return api;
+  };
+  App.modal.closeAll = function () { modalStack.slice().reverse().forEach(function (m) { m.close('api'); }); };
+  App.modal.top = function () { return modalStack[modalStack.length - 1] || null; };
+
+  App.confirm = function (opts) {
+    var o = opts || {};
+    var danger = !!o.danger;
+    return new Promise(function (resolve) {
+      var result = false;
+      var body = App.html`<div class="modal__lead">${danger ? App.html`<span class="modal__lead-icon modal__lead-icon--danger">${App.icon('alert')}</span>` : ''}<p class="modal__text">${o.text || ''}</p></div>`;
+      App.modal({
+        title: o.title || 'تأكيد',
+        body: body,
+        size: 'sm',
+        role: 'alertdialog',
+        actions: [
+          { label: o.okText || 'تأكيد', kind: danger ? 'danger' : 'primary', autofocus: !danger, onClick: function () { result = true; } },
+          { label: o.cancelText || 'إلغاء', kind: 'secondary', autofocus: danger }
+        ],
+        onClose: function () { resolve(result); }
+      });
+    });
+  };
+
+  function minLenMsg(n) {
+    if (n <= 1) return 'هذا الحقل مطلوب.';
+    if (n === 2) return 'اكتب حرفين على الأقل.';
+    if (n <= 10) return 'اكتب ' + n + ' أحرف على الأقل.';
+    return 'اكتب ' + n + ' حرفًا على الأقل.';
+  }
+  App.prompt = function (opts) {
+    var o = opts || {};
+    var multiline = !!o.multiline;
+    var minLength = Math.max(0, +o.minLength || 0);
+    var maxLength = Math.max(1, +o.maxLength || (multiline ? 1000 : 200));
+    return new Promise(function (resolve) {
+      var result = null;
+      var fid = uid('prompt');
+      var control = multiline
+        ? App.html`<textarea class="textarea" id="${fid}" rows="4" maxlength="${maxLength}" placeholder="${o.placeholder || ''}" aria-describedby="${fid}-err ${fid}-count"></textarea>`
+        : App.html`<input class="input" id="${fid}" type="text" maxlength="${maxLength}" placeholder="${o.placeholder || ''}" aria-describedby="${fid}-err ${fid}-count" autocomplete="off">`;
+      var body = App.html`<div class="stack">
+        ${o.text ? App.html`<p class="modal__text">${o.text}</p>` : ''}
+        <div class="field">
+          ${o.label ? App.html`<label class="field__label" for="${fid}">${o.label}</label>` : ''}
+          ${control}
+          <div class="field__foot"><span class="field__error" id="${fid}-err" role="alert">${App.icon('alert')}<span></span></span><span class="field__count" id="${fid}-count" aria-live="polite"></span></div>
+        </div>
+      </div>`;
+      var m = App.modal({
+        title: o.title || '',
+        body: body,
+        size: 'sm',
+        actions: [
+          { label: o.okText || 'حفظ', kind: o.danger ? 'danger' : 'primary', onClick: function () { return submit(); } },
+          { label: o.cancelText || 'إلغاء', kind: 'secondary' }
+        ],
+        onClose: function () { resolve(result); }
+      });
+      var input = m.body.querySelector('#' + fid);
+      var field = m.body.querySelector('.field');
+      var errText = m.body.querySelector('.field__error span');
+      var count = m.body.querySelector('.field__count');
+      if (!o.label) input.setAttribute('aria-label', String(o.title || 'النص'));
+      input.value = o.value === undefined || o.value === null ? '' : String(o.value).slice(0, maxLength);
+      function updateCount() {
+        var len = input.value.length;
+        count.textContent = len + ' / ' + maxLength;
+        count.classList.toggle('is-near', len >= maxLength * 0.85);
+        if (field.classList.contains('has-error') && input.value.trim().length >= minLength) field.classList.remove('has-error');
+      }
+      function submit() {
+        var v = input.value.trim();
+        if (v.length < minLength || (minLength === 0 && o.required && !v)) {
+          errText.textContent = minLenMsg(Math.max(1, minLength));
+          field.classList.add('has-error');
+          input.setAttribute('aria-invalid', 'true');
+          input.focus();
+          return false;
+        }
+        result = v.slice(0, maxLength);
+        return true;
+      }
+      input.addEventListener('input', updateCount);
+      input.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' && !ev.isComposing && (!multiline || ev.ctrlKey || ev.metaKey)) {
+          ev.preventDefault();
+          if (submit()) m.close('action');
+        }
+      });
+      updateCount();
+    });
+  };
+
+  /* ------------------------------------------------------------ clipboard */
+  function execCopy(text) {
+    var ta = doc.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('inputmode', 'none');
+    ta.setAttribute('aria-hidden', 'true');
+    ta.setAttribute('data-nabd-copy', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;width:2px;height:2px;padding:0;border:0;opacity:0;font-size:16px;';
+    var active = doc.activeElement;
+    var sel = global.getSelection ? global.getSelection() : null;
+    var range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+    doc.body.appendChild(ta);
+    var ok = false;
+    try {
+      ta.focus({ preventScroll: true });
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      ok = !!doc.execCommand('copy');
+    } catch (e) { ok = false; }
+    doc.body.removeChild(ta);
+    try {
+      if (range && sel) { sel.removeAllRanges(); sel.addRange(range); }
+      if (active && isFn(active.focus)) active.focus({ preventScroll: true });
+    } catch (e) { /* ignore */ }
+    return ok;
+  }
+  function manualCopy(text, done) {
+    var id = uid('copy');
+    var m = App.modal({
+      title: 'انسخ النص',
+      body: App.html`<div class="stack stack--sm">
+        <p class="text-muted text-sm">لم يسمح المتصفح بالنسخ التلقائي. حدّد النص التالي ثم انسخه.</p>
+        <textarea class="textarea" id="${id}" rows="${Math.min(10, Math.max(3, text.split('\n').length + 1))}" readonly>${text}</textarea>
+      </div>`,
+      size: 'sm',
+      actions: [
+        { label: 'نسخ', kind: 'primary', icon: 'copy', close: false, onClick: function () {
+          var ta = m.body.querySelector('textarea');
+          ta.focus(); ta.select();
+          var ok = false;
+          try { ok = doc.execCommand('copy'); } catch (e) { ok = false; }
+          if (ok) { App.toast('تم النسخ'); m.close('action'); }
+          return false;
+        } },
+        { label: 'إغلاق', kind: 'secondary' }
+      ],
+      onClose: function () { done(false); }
+    });
+    var area = m.body.querySelector('textarea');
+    area.addEventListener('focus', function () { area.select(); });
+    setTimeout(function () { try { area.focus(); area.select(); } catch (e) { /* ignore */ } }, 60);
+  }
+  App.copy = function (text) {
+    var s = text === null || text === undefined ? '' : String(text);
+    return new Promise(function (resolve) {
+      var settled = false;
+      function fallback() {
+        if (execCopy(s)) { resolve(true); return; }
+        manualCopy(s, resolve);
+      }
+      var clip = global.navigator && global.navigator.clipboard;
+      if (clip && isFn(clip.writeText) && global.isSecureContext !== false) {
+        var timer = setTimeout(function () { if (!settled) { settled = true; fallback(); } }, 1200);
+        try {
+          clip.writeText(s).then(function () {
+            if (settled) return;
+            settled = true; clearTimeout(timer); resolve(true);
+          }, function () {
+            if (settled) return;
+            settled = true; clearTimeout(timer); fallback();
+          });
+        } catch (e) {
+          settled = true; clearTimeout(timer); fallback();
+        }
+      } else {
+        fallback();
+      }
+    });
+  };
+
+  /* ------------------------------------------------------------- WhatsApp */
+  function waPhone(phone) {
+    var d = latinDigits(phone === null || phone === undefined ? '' : String(phone)).replace(/\D/g, '');
+    if (!d) return '';
+    if (d.indexOf('00') === 0) d = d.slice(2);
+    if (/^05\d{8}$/.test(d)) d = '966' + d.slice(1);
+    else if (/^5\d{8}$/.test(d)) d = '966' + d;
+    else if (/^9660\d{9}$/.test(d)) d = '966' + d.slice(4);
+    return d.length >= 8 && d.length <= 15 ? d : '';
+  }
+  App.wa = {
+    phone: waPhone,
+    link: function (phone, text) {
+      var d = waPhone(phone);
+      var t = text === null || text === undefined ? '' : String(text);
+      if (!d) return 'https://wa.me/?text=' + encodeURIComponent(t);
+      return 'https://wa.me/' + d + (t ? '?text=' + encodeURIComponent(t) : '');
+    },
+    open: function (phone, text) {
+      var url = App.wa.link(phone, text);
+      var w = null;
+      try { w = global.open(url, '_blank'); } catch (e) { w = null; }
+      if (w) { try { w.opener = null; } catch (e) { /* cross-origin */ } return true; }
+      App.modal({
+        title: 'فتح واتساب',
+        body: App.html`<div class="stack">
+          <p class="modal__text">منع المتصفح فتح نافذة جديدة. اضغط الزر لفتح المحادثة في واتساب.</p>
+          <a class="btn btn-whatsapp btn-lg btn-block" href="${url}" target="_blank" rel="noopener noreferrer" data-modal-close>${App.icon('whatsapp')}<span>فتح واتساب</span></a>
+        </div>`,
+        size: 'sm'
+      });
+      return false;
+    }
+  };
+
+  /* --------------------------------------------------------------- store */
+  var memStore = {};
+  var STORE_PREFIX = 'nabd:';
+  App.store = {
+    get: function (key, fallback) {
+      var def = fallback === undefined ? null : fallback;
+      var raw = null;
+      if (Object.prototype.hasOwnProperty.call(memStore, key)) raw = memStore[key];
+      else { try { raw = global.localStorage.getItem(STORE_PREFIX + key); } catch (e) { raw = null; } }
+      if (raw === null || raw === undefined) return def;
+      try { return JSON.parse(raw); } catch (e) { return def; }
+    },
+    set: function (key, value) {
+      var raw;
+      try { raw = JSON.stringify(value); } catch (e) { return false; }
+      try { global.localStorage.setItem(STORE_PREFIX + key, raw); delete memStore[key]; return true; }
+      catch (e) { memStore[key] = raw; return false; }
+    },
+    del: function (key) {
+      try { global.localStorage.removeItem(STORE_PREFIX + key); } catch (e) { /* ignore */ }
+      delete memStore[key];
+    }
+  };
+
+  /* --------------------------------------------------------- busy/debounce */
+  App.busy = function (btn, promise) {
+    var p;
+    try { p = Promise.resolve(isFn(promise) ? promise() : promise); } catch (e) { p = Promise.reject(e); }
+    var b = resolveEl(btn);
+    if (!b) return p;
+    var wasDisabled = !!b.disabled;
+    b.classList.add('is-loading');
+    b.setAttribute('aria-busy', 'true');
+    if ('disabled' in b) b.disabled = true;
+    var done = function () {
+      b.classList.remove('is-loading');
+      b.removeAttribute('aria-busy');
+      if ('disabled' in b) b.disabled = wasDisabled;
+    };
+    p.then(done, done);
+    return p;
+  };
+  App.debounce = function (fn, ms) {
+    var t = null, lastArgs = null, lastThis = null;
+    var wait = isNum(ms) ? ms : 250;
+    function d() {
+      lastArgs = arguments; lastThis = this;
+      clearTimeout(t);
+      t = setTimeout(function () { t = null; fn.apply(lastThis, lastArgs); }, wait);
+    }
+    d.cancel = function () { clearTimeout(t); t = null; };
+    d.flush = function () { if (t) { clearTimeout(t); t = null; fn.apply(lastThis, lastArgs); } };
+    return d;
+  };
+
+  var scriptCache = {};
+  App.loadScript = function (url) {
+    var key = String(url);
+    if (scriptCache[key]) return scriptCache[key];
+    var p = new Promise(function (resolve, reject) {
+      var s = doc.createElement('script');
+      var done = false;
+      function fail() {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (s.parentNode) s.parentNode.removeChild(s);
+        delete scriptCache[key];
+        reject(mkErr('تعذّر تحميل أحد مكوّنات الصفحة — تحقّق من الاتصال بالإنترنت.', 'LOAD_FAILED', key));
+      }
+      var timer = setTimeout(fail, 8000);
+      s.async = true;
+      s.src = key;
+      s.onload = function () { if (done) return; done = true; clearTimeout(timer); resolve(true); };
+      s.onerror = fail;
+      (doc.head || doc.documentElement).appendChild(s);
+    });
+    scriptCache[key] = p;
+    return p;
+  };
+
+  App.fillTemplate = function (tpl, data) {
+    var d = data || {};
+    var map = {
+      'المدرسة': d.school, 'الرابط': d.link, 'المشرف': d.supervisor,
+      'التاريخ': d.date, 'الملاحظة': d.note, 'الرمز': d.pin
+    };
+    var out = String(tpl === null || tpl === undefined ? '' : tpl).replace(/\{\s*(المدرسة|الرابط|المشرف|التاريخ|الملاحظة|الرمز)\s*\}/g, function (all, k) {
+      var v = map[k];
+      return v === null || v === undefined ? '' : String(v);
+    });
+    return out.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+  };
+
+  /* ---------------------------------------------------- image compression */
+  function canvasOf(w, h) {
+    var c = doc.createElement('canvas');
+    c.width = w; c.height = h;
+    return c;
+  }
+  function decodeImage(file) {
+    var tryBitmap = function (opt) { return opt ? global.createImageBitmap(file, opt) : global.createImageBitmap(file); };
+    var viaImg = function () {
+      return new Promise(function (resolve, reject) {
+        var url = URL.createObjectURL(file);
+        var img = new Image();
+        img.decoding = 'async';
+        img.onload = function () {
+          resolve({ src: img, w: img.naturalWidth, h: img.naturalHeight, release: function () { URL.revokeObjectURL(url); } });
+        };
+        img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('decode')); };
+        img.src = url;
+      });
+    };
+    if (isFn(global.createImageBitmap)) {
+      var asBitmap = function (bmp) { return { src: bmp, w: bmp.width, h: bmp.height, release: function () { try { bmp.close(); } catch (e) { /* ignore */ } } }; };
+      return tryBitmap({ imageOrientation: 'from-image' }).then(asBitmap, function () {
+        return tryBitmap(null).then(asBitmap, viaImg);
+      });
+    }
+    return viaImg();
+  }
+  function canvasToBlob(canvas, quality) {
+    return new Promise(function (resolve, reject) {
+      if (isFn(canvas.toBlob)) {
+        canvas.toBlob(function (b) { if (b) resolve(b); else reject(new Error('encode')); }, 'image/jpeg', quality);
+      } else {
+        try {
+          var dataUrl = canvas.toDataURL('image/jpeg', quality);
+          var bin = atob(dataUrl.split(',')[1]);
+          var arr = new Uint8Array(bin.length);
+          for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+          resolve(new Blob([arr], { type: 'image/jpeg' }));
+        } catch (e) { reject(e); }
+      }
+    });
+  }
+  function blobToBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { var s = String(fr.result || ''); resolve(s.slice(s.indexOf(',') + 1)); };
+      fr.onerror = function () { reject(fr.error || new Error('read')); };
+      fr.readAsDataURL(blob);
+    });
+  }
+  function mb(bytes) { return (Math.round(bytes / 104857.6) / 10) + ' ميجابايت'; }
+  App.image = {
+    compress: function (file, opts) {
+      var o = Object.assign({ maxSide: 1600, quality: 0.82, maxBytes: 3 * 1024 * 1024, thumbSide: 360 }, opts || {});
+      return new Promise(function (resolve, reject) {
+        if (!file || typeof file.size !== 'number') { reject(mkErr('لم يتم اختيار صورة.', 'NO_FILE')); return; }
+        var type = String(file.type || '').toLowerCase();
+        var name = String(file.name || '');
+        var looksImage = type ? type.indexOf('image/') === 0 : /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif)$/i.test(name);
+        if (!looksImage) { reject(mkErr('الملف المختار ليس صورة. اختر صورة بصيغة JPG أو PNG.', 'NOT_IMAGE')); return; }
+        if (file.size === 0) { reject(mkErr('ملف الصورة فارغ. اختر صورة أخرى.', 'EMPTY')); return; }
+        if (file.size > 40 * 1024 * 1024) { reject(mkErr('حجم الصورة كبير جدًا (' + mb(file.size) + '). اختر صورة أصغر.', 'TOO_LARGE')); return; }
+        var isHeic = /hei[cf]/.test(type) || /\.hei[cf]$/i.test(name);
+        decodeImage(file).then(function (img) {
+          var sw = img.w, sh = img.h;
+          if (!sw || !sh) { img.release(); throw new Error('decode'); }
+          var scale = Math.min(1, o.maxSide / Math.max(sw, sh));
+          var w = Math.max(1, Math.round(sw * scale)), h = Math.max(1, Math.round(sh * scale));
+          // Step down by halves for quality on large reductions, keeping canvases bounded.
+          var cur = img.src, cw = sw, ch = sh, temp = [];
+          while (cw >= w * 2 && ch >= h * 2) {
+            var nw = Math.round(cw / 2), nh = Math.round(ch / 2);
+            if (nw * nh > 16000000) break;
+            var c2 = canvasOf(nw, nh);
+            var x2 = c2.getContext('2d');
+            x2.imageSmoothingEnabled = true; x2.imageSmoothingQuality = 'high';
+            x2.drawImage(cur, 0, 0, nw, nh);
+            temp.push(c2); cur = c2; cw = nw; ch = nh;
+          }
+          var canvas = canvasOf(w, h);
+          var ctx = canvas.getContext('2d');
+          if (!ctx) { img.release(); throw new Error('canvas'); }
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, w, h);
+          ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(cur, 0, 0, w, h);
+          img.release();
+          temp.forEach(function (c) { c.width = 0; c.height = 0; });
+
+          var tScale = Math.min(1, o.thumbSide / Math.max(w, h));
+          var thumb = canvasOf(Math.max(1, Math.round(w * tScale)), Math.max(1, Math.round(h * tScale)));
+          var tctx = thumb.getContext('2d');
+          tctx.imageSmoothingEnabled = true; tctx.imageSmoothingQuality = 'high';
+          tctx.drawImage(canvas, 0, 0, thumb.width, thumb.height);
+          var thumbUrl = '';
+          try { thumbUrl = thumb.toDataURL('image/jpeg', 0.72); } catch (e) { thumbUrl = ''; }
+          thumb.width = 0; thumb.height = 0;
+
+          var qualities = [o.quality, Math.min(o.quality, 0.68), 0.55];
+          var attempt = function (i) {
+            return canvasToBlob(canvas, qualities[i]).then(function (blob) {
+              if (blob.size <= o.maxBytes) return blob;
+              if (i + 1 < qualities.length) return attempt(i + 1);
+              throw mkErr('حجم الصورة بعد الضغط (' + mb(blob.size) + ') أكبر من الحد المسموح (' + mb(o.maxBytes) + '). اختر صورة أصغر.', 'TOO_LARGE');
+            });
+          };
+          return attempt(0).then(function (blob) {
+            canvas.width = 0; canvas.height = 0;
+            return blobToBase64(blob).then(function (b64) {
+              var base = name.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|\u0000-\u001F]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'صورة';
+              var previewUrl = '';
+              try { previewUrl = URL.createObjectURL(blob); } catch (e) { previewUrl = 'data:image/jpeg;base64,' + b64; }
+              resolve({ base64: b64, mime: 'image/jpeg', name: base + '.jpg', w: w, h: h, size: blob.size, previewUrl: previewUrl, thumbUrl: thumbUrl || previewUrl });
+            });
+          });
+        }).catch(function (err) {
+          if (err && err.code === 'TOO_LARGE') { reject(err); return; }
+          if (isHeic) reject(mkErr('صيغة HEIC غير مدعومة في هذا المتصفح. اختر الصورة من المعرض بصيغة JPG، أو غيّر إعداد الكاميرا إلى «الأكثر توافقًا».', 'UNREADABLE'));
+          else reject(mkErr('تعذّرت قراءة الصورة. جرّب صورة أخرى بصيغة JPG أو PNG.', 'UNREADABLE'));
+        });
+      });
+    }
+  };
+
+  /* --------------------------------------------------------------- print */
+  var printState = null;
+  function cleanupPrint() {
+    if (!printState) return;
+    var st = printState;
+    printState = null;
+    if (st.root.parentNode) st.root.parentNode.removeChild(st.root);
+    if (st.doc) st.doc.classList.remove('is-print-active');
+    doc.body.classList.remove('is-printing-doc');
+    st.listeners.forEach(function (l) { l[0].removeEventListener(l[1], l[2], true); });
+    clearTimeout(st.timer);
+    if (st.resolve) st.resolve(true);
+  }
+  function preparePrint(docEl) {
+    cleanupPrint();
+    var root = doc.createElement('div');
+    root.className = 'print-root';
+    root.setAttribute('aria-hidden', 'true');
+    var clone = docEl.cloneNode(true);
+    clone.classList.add('is-print-active');
+    Array.prototype.forEach.call(clone.querySelectorAll('[id]'), function (n) { n.removeAttribute('id'); });
+    Array.prototype.forEach.call(clone.querySelectorAll('img'), function (im) { im.loading = 'eager'; });
+    root.appendChild(clone);
+    doc.body.appendChild(root);
+    docEl.classList.add('is-print-active');
+    doc.body.classList.add('is-printing-doc');
+    printState = { root: root, doc: docEl, listeners: [], timer: null, resolve: null };
+    return clone;
+  }
+  function waitImages(root, ms) {
+    var imgs = Array.prototype.slice.call(root.querySelectorAll('img'));
+    var waits = imgs.map(function (im) {
+      if (im.complete && im.naturalWidth) return Promise.resolve();
+      return new Promise(function (r) { im.addEventListener('load', r, { once: true }); im.addEventListener('error', r, { once: true }); });
+    });
+    return Promise.race([Promise.all(waits), new Promise(function (r) { setTimeout(r, ms); })]);
+  }
+  App.print = function (docEl) {
+    var el = resolveEl(docEl) || doc.querySelector('.modal .doc') || doc.querySelector('.doc');
+    if (!el) { try { global.print(); } catch (e) { /* ignore */ } return Promise.resolve(false); }
+    var clone = preparePrint(el);
+    var st = printState;
+    return new Promise(function (resolve) {
+      st.resolve = resolve;
+      waitImages(clone, 6000).then(function () {
+        requestAnimationFrame(function () {
+          if (printState !== st) return;
+          var finish = function () { if (printState === st) cleanupPrint(); };
+          global.addEventListener('afterprint', finish, { once: true });
+          try { global.print(); } catch (e) { finish(); return; }
+          // print() blocks until the dialog closes on desktop; resolve now and
+          // let cleanup run on afterprint (or the fallbacks below).
+          setTimeout(function () { if (st.resolve) { var r = st.resolve; st.resolve = null; r(true); } }, 0);
+          // Some mobile browsers return from print() immediately and never fire
+          // afterprint — clean up on the next interaction (harmless on screen).
+          setTimeout(function () {
+            if (printState !== st) return;
+            var onAct = function () { finish(); };
+            [[global, 'focus'], [doc, 'pointerdown'], [doc, 'keydown']].forEach(function (pair) {
+              pair[0].addEventListener(pair[1], onAct, true);
+              st.listeners.push([pair[0], pair[1], onAct]);
+            });
+            st.timer = setTimeout(finish, 120000);
+          }, 1500);
+        });
+      });
+    });
+  };
+  // Ctrl+P while a report is open in a dialog prints that report only.
+  global.addEventListener('beforeprint', function () {
+    if (printState) return;
+    var top = modalStack[modalStack.length - 1];
+    var d = top && top.el.querySelector('.doc');
+    if (!d) return;
+    preparePrint(d);
+    global.addEventListener('afterprint', function () { cleanupPrint(); }, { once: true });
+  });
+
+  /* ======================================================== inline SVG charts */
+  var SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)', 'var(--series-6)'];
+  var COLOR_RE = /^(#[0-9a-fA-F]{3,8}|var\(--[a-zA-Z0-9-]+\)|(?:rgb|rgba|hsl|hsla)\([0-9.,%\s/]+\)|[a-zA-Z]{3,24})$/;
+  function safeColor(c, fallback) { return typeof c === 'string' && COLOR_RE.test(c.trim()) ? c.trim() : fallback; }
+  var charts = [];
+  var measureCtx = null, fontFamily = null;
+  function textW(s, size, weight) {
+    if (!measureCtx) {
+      try { measureCtx = doc.createElement('canvas').getContext('2d'); } catch (e) { measureCtx = null; }
+    }
+    if (!fontFamily) {
+      try { fontFamily = global.getComputedStyle(doc.body).fontFamily || 'sans-serif'; } catch (e) { fontFamily = 'sans-serif'; }
+    }
+    if (!measureCtx) return String(s).length * size * 0.56;
+    measureCtx.font = (weight || 500) + ' ' + size + 'px ' + fontFamily;
+    return measureCtx.measureText(String(s)).width;
+  }
+  function fitText(s, maxW, size, weight) {
+    s = String(s);
+    if (textW(s, size, weight) <= maxW) return s;
+    var lo = 0, hi = s.length;
+    while (lo < hi) {
+      var mid = Math.ceil((lo + hi) / 2);
+      if (textW(s.slice(0, mid).trim() + '…', size, weight) <= maxW) lo = mid; else hi = mid - 1;
+    }
+    return lo > 0 ? s.slice(0, lo).trim() + '…' : '…';
+  }
+  function f2(n) { return String(Math.round(n * 100) / 100); }
+  function niceScale(dataMax, suffix, forced) {
+    var max;
+    if (isNum(forced) && forced > 0) {
+      max = forced;
+    } else {
+      max = dataMax > 0 ? dataMax : (suffix === '٪' ? 10 : 1);
+      if (suffix === '٪' && max > 60 && max <= 100) max = 100;
+    }
+    var raw = max / 4;
+    var p = Math.pow(10, Math.floor(Math.log10(raw)));
+    var r = raw / p;
+    var step = (r <= 1 ? 1 : r <= 2 ? 2 : r <= 2.5 ? 2.5 : r <= 5 ? 5 : 10) * p;
+    var top = (isNum(forced) && forced > 0) ? forced : Math.ceil(max / step - 1e-9) * step;
+    if (suffix === '٪' && !(isNum(forced) && forced > 0) && dataMax <= 100 && top > 100) top = 100;
+    var ticks = [];
+    for (var t = 0; t <= top + step * 1e-6; t += step) ticks.push(Math.round(t * 1000) / 1000);
+    if (ticks[ticks.length - 1] < top - 1e-6) ticks.push(top);
+    return { max: top, ticks: ticks };
+  }
+  function fmtVal(v, suffix, o) {
+    if (v === null || v === undefined) return '—';
+    if (o && isFn(o.valueFormat)) return String(o.valueFormat(v));
+    return App.fmt.num(round1(v)) + (suffix || '');
+  }
+  function svgText(x, y, str, align, cls, rtl, extra) {
+    // align: 'left' | 'right' | 'middle' (physical). rtl: Arabic text run.
+    var anchor = align === 'middle' ? 'middle' : (rtl ? (align === 'right' ? 'start' : 'end') : (align === 'left' ? 'start' : 'end'));
+    return '<text x="' + f2(x) + '" y="' + f2(y) + '" text-anchor="' + anchor + '" direction="' + (rtl ? 'rtl' : 'ltr') + '"' +
+      (cls ? ' class="' + cls + '"' : '') + (extra || '') + '>' + esc(str) + '</text>';
+  }
+  function emptyChart(el, text) {
+    el.innerHTML = '<div class="empty empty--sm">' + App.icon('chart').__html +
+      '<p>' + esc(text || 'لا توجد بيانات كافية لعرض الرسم البياني بعد.') + '</p></div>';
+  }
+  function makeTip(el) {
+    var tip = doc.createElement('div');
+    tip.className = 'chart__tip';
+    tip.setAttribute('aria-hidden', 'true');
+    el.appendChild(tip);
+    return tip;
+  }
+  function fillTip(tip, title, rows) {
+    tip.textContent = '';
+    if (title) {
+      var t = doc.createElement('div');
+      t.className = 'chart__tip-title';
+      t.textContent = title;
+      tip.appendChild(t);
+    }
+    rows.forEach(function (r) {
+      var row = doc.createElement('div');
+      row.className = 'chart__tip-row';
+      if (r.color) {
+        var k = doc.createElement('span');
+        k.className = r.swatch ? 'chart__swatch' : 'chart__key';
+        k.style.background = r.color;
+        row.appendChild(k);
+      }
+      var v = doc.createElement('span');
+      v.className = 'chart__tip-val';
+      v.textContent = r.value;
+      var n = doc.createElement('span');
+      n.className = 'chart__tip-name';
+      n.textContent = r.name || '';
+      row.appendChild(v);
+      if (r.name) row.appendChild(n);
+      tip.appendChild(row);
+    });
+  }
+  function placeTip(st, tip, x, y, svgEl) {
+    var ox = svgEl.offsetLeft, oy = svgEl.offsetTop;
+    tip.classList.add('is-on');
+    var tw = tip.offsetWidth, th = tip.offsetHeight;
+    var W = st.el.clientWidth;
+    var left = ox + x - tw - 14;
+    if (left < 0) left = ox + x + 14;
+    left = clamp(left, 0, Math.max(0, W - tw));
+    var top = clamp(oy + y - th / 2, 0, Math.max(0, st.el.clientHeight - th));
+    tip.style.left = f2(left) + 'px';
+    tip.style.top = f2(top) + 'px';
+  }
+  function touchHide(st, fn) {
+    clearTimeout(st.touchTimer);
+    st.touchTimer = setTimeout(fn, 2600);
+  }
+  function hideTip(st) {
+    if (st.tip) st.tip.classList.remove('is-on');
+    st.el.classList.remove('is-hovering');
+  }
+  function svgPoint(svgEl, ev, W) {
+    var r = svgEl.getBoundingClientRect();
+    var k = r.width ? W / r.width : 1;
+    return { x: (ev.clientX - r.left) * k, y: (ev.clientY - r.top) * k };
+  }
+  function srTable(caption, head, rows) {
+    // Wrapped: a <table> ignores width:1px, so .sr-only goes on a block wrapper.
+    var h = '<div class="sr-only"><table><caption>' + esc(caption) + '</caption><thead><tr>';
+    head.forEach(function (c) { h += '<th scope="col">' + esc(c) + '</th>'; });
+    h += '</tr></thead><tbody>';
+    rows.forEach(function (r) {
+      h += '<tr>';
+      r.forEach(function (c, i) { h += i === 0 ? '<th scope="row">' + esc(c) + '</th>' : '<td>' + esc(c) + '</td>'; });
+      h += '</tr>';
+    });
+    return h + '</tbody></table></div>';
+  }
+  function mountChart(container, opts, draw, extraClass) {
+    var el = resolveEl(container);
+    if (!el) return null;
+    if (el.__nabdChart) el.__nabdChart.destroy();
+    el.classList.add('chart');
+    if (extraClass) el.classList.add(extraClass);
+    var st = { el: el, opts: opts || {}, width: 0, tip: null };
+    var raf = 0;
+    function innerW() {
+      var w = el.clientWidth || 0;
+      try {
+        var cs = global.getComputedStyle(el);
+        w -= (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      } catch (e) { /* ignore */ }
+      return Math.round(w);
+    }
+    function render() {
+      var w = innerW();
+      st.width = w > 0 ? w : 600;
+      st.tip = null;
+      el.classList.remove('is-hovering');
+      draw(st);
+    }
+    var ro = null;
+    var onWin = function () { cancelAnimationFrame(raf); raf = requestAnimationFrame(function () { var w = innerW(); if (w > 0 && w !== st.width) render(); }); };
+    if (isFn(global.ResizeObserver)) { ro = new ResizeObserver(onWin); ro.observe(el); }
+    else global.addEventListener('resize', onWin);
+    var handle = {
+      el: el,
+      update: function (next) { st.opts = Object.assign({}, st.opts, next || {}); render(); },
+      redraw: render,
+      destroy: function () {
+        if (ro) ro.disconnect(); else global.removeEventListener('resize', onWin);
+        cancelAnimationFrame(raf);
+        var i = charts.indexOf(handle);
+        if (i >= 0) charts.splice(i, 1);
+        if (el.__nabdChart === handle) el.__nabdChart = null;
+      }
+    };
+    el.__nabdChart = handle;
+    charts.push(handle);
+    render();
+    return handle;
+  }
+  // Re-measure once the web font arrives so labels fit their final glyphs.
+  try {
+    if (doc.fonts && doc.fonts.ready) {
+      doc.fonts.ready.then(function () {
+        fontFamily = null;
+        charts.slice().forEach(function (c) { if (doc.contains(c.el)) c.redraw(); else c.destroy(); });
+      });
+    }
+  } catch (e) { /* ignore */ }
+
+  /* ---- line chart (RTL: first label on the right) */
+  function drawLine(st) {
+    var o = st.opts, el = st.el, W = st.width;
+    var labels = (o.labels || []).map(function (l) { return l === null || l === undefined ? '' : String(l); });
+    var n = labels.length;
+    var suffix = o.ySuffix === undefined ? '٪' : String(o.ySuffix);
+    var series = (o.series || []).map(function (s, i) {
+      return {
+        name: s && s.name !== undefined ? String(s.name) : '',
+        values: labels.map(function (_, j) { return toNum(s && s.values ? s.values[j] : null); }),
+        color: safeColor(s && s.color, SERIES[i % SERIES.length])
+      };
+    });
+    var all = [];
+    series.forEach(function (s) { s.values.forEach(function (v) { if (v !== null) all.push(v); }); });
+    if (!n || !series.length || !all.length) { emptyChart(el, o.emptyText); return; }
+
+    var H = Math.max(140, +o.height || 220);
+    var sc = niceScale(Math.max.apply(null, all), suffix, toNum(o.yMax));
+    var tickTxt = sc.ticks.map(function (t) { return App.fmt.num(t) + suffix; });
+    var isoLabels = labels.every(function (l) { return !!parseISO(l); });
+    var xTxt = labels.map(function (l) { return isoLabels ? App.date.short(l) : l; });
+    var tipTitle = labels.map(function (l) { return isoLabels ? App.date.dayName(l) + ' ' + App.date.greg(l, { withYear: false }) : l; });
+    var yLabW = Math.max.apply(null, tickTxt.map(function (t) { return textW(t, 11.5, 500); }));
+    var xLabW = Math.max.apply(null, xTxt.map(function (t) { return textW(t, 11.5, 500); }));
+    var padR = Math.ceil(yLabW) + 12, padL = Math.max(10, Math.ceil(xLabW / 2) + 2), padT = 12, padB = 30;
+    var plotW = Math.max(40, W - padR - padL), plotH = Math.max(60, H - padT - padB);
+    var x0 = W - padR;
+    var stepX = n > 1 ? plotW / (n - 1) : 0;
+    var X = function (i) { return n > 1 ? x0 - i * stepX : x0 - plotW / 2; };
+    var Y = function (v) { return padT + plotH - clamp(v / sc.max, 0, 1) * plotH; };
+    var base = padT + plotH;
+
+    var s = '';
+    // grid + y ticks
+    sc.ticks.forEach(function (t, i) {
+      var y = Math.round(Y(t)) + 0.5;
+      s += '<line class="' + (t === 0 ? 'chart__axis' : 'chart__grid') + '" x1="' + f2(padL) + '" x2="' + f2(x0) + '" y1="' + y + '" y2="' + y + '"/>';
+      s += svgText(x0 + 8, y + 4, tickTxt[i], 'left', 'chart__tick', false);
+    });
+    // x labels (thinned so they never collide)
+    var gap = xLabW + 12;
+    var k = stepX > 0 ? Math.max(1, Math.ceil(gap / stepX)) : 1;
+    var shown = [];
+    for (var i = 0; i < n; i += k) shown.push(i);
+    var lastShown = shown[shown.length - 1];
+    if (lastShown !== n - 1 && n > 1) {
+      if ((n - 1 - lastShown) * stepX >= gap) shown.push(n - 1);
+      else if (shown.length > 1) shown[shown.length - 1] = n - 1;
+    }
+    shown.forEach(function (i) {
+      s += svgText(X(i), base + 19, xTxt[i], 'middle', 'chart__tick', false);
+    });
+    // series
+    var single = series.length === 1;
+    series.forEach(function (se) {
+      var segs = [], cur = [];
+      se.values.forEach(function (v, i) {
+        if (v === null) { if (cur.length) segs.push(cur); cur = []; }
+        else cur.push([X(i), Y(v)]);
+      });
+      if (cur.length) segs.push(cur);
+      segs.forEach(function (seg) {
+        if (seg.length === 1) {
+          s += '<circle class="chart__dot" r="3.5" cx="' + f2(seg[0][0]) + '" cy="' + f2(seg[0][1]) + '" style="fill:' + se.color + '"/>';
+          return;
+        }
+        var d = seg.map(function (p, j) { return (j ? 'L' : 'M') + f2(p[0]) + ' ' + f2(p[1]); }).join('');
+        if (single) {
+          s += '<path class="chart__area" style="fill:' + se.color + '" d="' + d + 'L' + f2(seg[seg.length - 1][0]) + ' ' + f2(base) + 'L' + f2(seg[0][0]) + ' ' + f2(base) + 'Z"/>';
+        }
+        s += '<path class="chart__line" style="stroke:' + se.color + '" d="' + d + '"/>';
+      });
+      // end dot on the latest value
+      for (var j = n - 1; j >= 0; j--) {
+        if (se.values[j] !== null) {
+          s += '<circle class="chart__dot" r="4" cx="' + f2(X(j)) + '" cy="' + f2(Y(se.values[j])) + '" style="fill:' + se.color + '"/>';
+          if (single && o.endLabel !== false) {
+            var txt = fmtVal(se.values[j], suffix, o);
+            var tw = textW(txt, 12, 700);
+            var lx = clamp(X(j), tw / 2 + 2, W - tw / 2 - 2);
+            var ly = Y(se.values[j]) - 10 < padT + 4 ? Y(se.values[j]) + 18 : Y(se.values[j]) - 10;
+            s += svgText(lx, ly, txt, 'middle', 'chart__value', false);
+          }
+          break;
+        }
+      }
+    });
+    // hover layer
+    s += '<line class="chart__cross" x1="0" x2="0" y1="' + padT + '" y2="' + f2(base) + '" visibility="hidden"/>';
+    s += '<g class="chart__hover"></g>';
+    s += '<rect class="chart__hit" x="0" y="0" width="' + W + '" height="' + H + '"/>';
+
+    var names = series.map(function (x) { return x.name; }).filter(Boolean);
+    var aria = o.ariaLabel || ('رسم بياني خطي' + (names.length ? ': ' + names.join('، ') : '') + (isoLabels && n > 1 ? ' — من ' + App.date.greg(labels[0]) + ' إلى ' + App.date.greg(labels[n - 1]) : ''));
+    var legend = '';
+    if (series.length > 1) {
+      legend = '<div class="chart__legend">' + series.map(function (x) {
+        return '<span class="chart__legend-item"><span class="chart__key" style="background:' + x.color + '"></span>' + esc(x.name) + '</span>';
+      }).join('') + '</div>';
+    }
+    var table = srTable(aria, [isoLabels ? 'التاريخ' : 'العنصر'].concat(series.map(function (x) { return x.name || 'القيمة'; })),
+      labels.map(function (l, i) { return [tipTitle[i]].concat(series.map(function (x) { return fmtVal(x.values[i], suffix, o); })); }));
+    el.innerHTML = legend +
+      '<svg class="chart__svg" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" tabindex="0" aria-label="' + esc(aria) + '" focusable="true">' + s + '</svg>' +
+      table + '<div class="sr-only" aria-live="polite"></div>';
+
+    var svgEl = el.querySelector('svg');
+    var cross = svgEl.querySelector('.chart__cross');
+    var hov = svgEl.querySelector('.chart__hover');
+    var live = el.querySelector('[aria-live]');
+    st.tip = makeTip(el);
+    var curI = -1;
+    function show(i, announce) {
+      i = clamp(i, 0, n - 1);
+      curI = i;
+      var x = X(i);
+      cross.setAttribute('x1', f2(x)); cross.setAttribute('x2', f2(x));
+      cross.setAttribute('visibility', 'visible');
+      var dots = '', ys = [];
+      var rows = [];
+      series.forEach(function (se) {
+        var v = se.values[i];
+        rows.push({ color: se.color, name: se.name, value: fmtVal(v, suffix, o) });
+        if (v !== null) { dots += '<circle class="chart__dot" r="5" cx="' + f2(x) + '" cy="' + f2(Y(v)) + '" style="fill:' + se.color + '"/>'; ys.push(Y(v)); }
+      });
+      hov.innerHTML = dots;
+      fillTip(st.tip, tipTitle[i], rows);
+      var yMid = ys.length ? ys.reduce(function (a, b) { return a + b; }, 0) / ys.length : padT + plotH / 2;
+      placeTip(st, st.tip, x, yMid, svgEl);
+      if (announce && live) live.textContent = tipTitle[i] + ': ' + rows.map(function (r) { return (r.name ? r.name + ' ' : '') + r.value; }).join('، ');
+    }
+    function hide() { cross.setAttribute('visibility', 'hidden'); hov.innerHTML = ''; hideTip(st); }
+    function idxAt(ev) {
+      var p = svgPoint(svgEl, ev, W);
+      return n > 1 ? Math.round((x0 - p.x) / stepX) : 0;
+    }
+    svgEl.addEventListener('pointermove', function (ev) { show(idxAt(ev), false); });
+    svgEl.addEventListener('pointerdown', function (ev) { show(idxAt(ev), false); });
+    svgEl.addEventListener('pointerleave', function (ev) { if (ev.pointerType === 'mouse') hide(); });
+    svgEl.addEventListener('pointerup', function (ev) { if (ev.pointerType !== 'mouse') touchHide(st, hide); });
+    svgEl.addEventListener('focus', function () { show(curI >= 0 ? curI : n - 1, true); });
+    svgEl.addEventListener('blur', hide);
+    svgEl.addEventListener('keydown', function (ev) {
+      var map = { ArrowLeft: 1, ArrowRight: -1, ArrowDown: 1, ArrowUp: -1 };
+      if (map[ev.key] !== undefined) { ev.preventDefault(); show((curI < 0 ? n - 1 : curI) + map[ev.key], true); }
+      else if (ev.key === 'Home') { ev.preventDefault(); show(0, true); }
+      else if (ev.key === 'End') { ev.preventDefault(); show(n - 1, true); }
+      else if (ev.key === 'Escape') { hide(); }
+    });
+  }
+
+  /* ---- horizontal bars (labels on the right, bars grow leftwards) */
+  function drawBars(st) {
+    var o = st.opts, el = st.el, W = st.width;
+    var suffix = o.ySuffix === undefined ? '٪' : String(o.ySuffix);
+    var thr = o.threshold && isNum(toNum(o.threshold.value !== undefined ? o.threshold.value : o.threshold)) ? toNum(o.threshold.value !== undefined ? o.threshold.value : o.threshold) : null;
+    var baseColor = safeColor(o.color, SERIES[0]);
+    var items = (o.items || []).map(function (it) {
+      var v = toNum(it && it.value);
+      var c = safeColor(it && it.color, null);
+      if (!c) c = thr !== null && v !== null && v >= thr ? 'var(--danger)' : baseColor;
+      return { label: it && it.label !== undefined ? String(it.label) : '', value: v, color: c };
+    });
+    var vals = items.map(function (i) { return i.value; }).filter(function (v) { return v !== null; });
+    if (!items.length || !vals.length) { emptyChart(el, o.emptyText); return; }
+    var maxV = Math.max.apply(null, vals.concat(thr !== null ? [thr] : []));
+    var max = niceScale(maxV, suffix, toNum(o.max)).max;
+    var n = items.length;
+    var topPad = thr !== null ? 22 : 4;
+    var rowH = o.height ? clamp((+o.height - topPad - 6) / n, 22, 48) : (W < 480 ? 36 : 34);
+    var barH = clamp(Math.round(rowH * 0.5), 10, 18);
+    var H = Math.round(topPad + n * rowH + 6);
+    var valTxt = items.map(function (it) { return fmtVal(it.value, suffix, o); });
+    var valW = Math.max.apply(null, valTxt.map(function (t) { return textW(t, 12, 700); })) + 8;
+    var labMax = Math.max.apply(null, items.map(function (it) { return textW(it.label, 13, 600); }));
+    var labW = clamp(Math.ceil(labMax) + 4, 64, Math.round(W * (W < 480 ? 0.42 : 0.34)));
+    var xR = W - labW - 12;
+    var barMax = Math.max(30, xR - valW - 6);
+    var s = '';
+    var rows = [];
+    if (thr !== null) {
+      var xt = Math.round(xR - clamp(thr / max, 0, 1) * barMax) + 0.5;
+      var lbl = (o.threshold && o.threshold.label) ? String(o.threshold.label) : 'الحد ' + fmtVal(thr, suffix);
+      var lw = textW(lbl, 11, 700);
+      s += '<line class="chart__ref" x1="' + f2(xt) + '" x2="' + f2(xt) + '" y1="' + f2(topPad - 4) + '" y2="' + f2(H - 4) + '"/>';
+      s += svgText(clamp(xt, lw / 2 + 2, W - lw / 2 - 2), 12, lbl, 'middle', 'chart__ref-label', true);
+    }
+    items.forEach(function (it, i) {
+      var yC = topPad + i * rowH + rowH / 2;
+      var bw = it.value !== null && it.value > 0 ? Math.max(2, clamp(it.value / max, 0, 1) * barMax) : 0;
+      var xe = xR - bw;
+      var y1 = yC - barH / 2, y2 = yC + barH / 2;
+      var g = '<g class="chart__row" data-i="' + i + '">';
+      g += '<rect class="chart__row-hit" x="0" y="' + f2(topPad + i * rowH) + '" width="' + W + '" height="' + f2(rowH) + '"/>';
+      if (bw > 0) {
+        var r = Math.min(4, bw / 2, barH / 2);
+        var d = 'M' + f2(xR) + ' ' + f2(y1) + 'H' + f2(xe + r) + 'A' + f2(r) + ' ' + f2(r) + ' 0 0 0 ' + f2(xe) + ' ' + f2(y1 + r) +
+          'V' + f2(y2 - r) + 'A' + f2(r) + ' ' + f2(r) + ' 0 0 0 ' + f2(xe + r) + ' ' + f2(y2) + 'H' + f2(xR) + 'Z';
+        g += '<path class="chart__bar" d="' + d + '" style="fill:' + it.color + '"/>';
+      }
+      g += svgText(W - 2, yC + 4.5, fitText(it.label, labW, 13, 600), 'right', 'chart__label', true);
+      g += svgText(xe - 6, yC + 4, valTxt[i], 'right', 'chart__value', false);
+      g += '</g>';
+      s += g;
+      rows.push([it.label, valTxt[i]]);
+    });
+    s += '<line class="chart__axis" x1="' + f2(xR + 0.5) + '" x2="' + f2(xR + 0.5) + '" y1="' + f2(topPad - 2) + '" y2="' + f2(H - 4) + '"/>';
+    var aria = o.ariaLabel || ('رسم أعمدة أفقية لـ ' + n + ' عنصرًا');
+    el.innerHTML = '<svg class="chart__svg" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" tabindex="0" aria-label="' + esc(aria) + '">' + s + '</svg>' +
+      srTable(aria, ['العنصر', 'القيمة'], rows) + '<div class="sr-only" aria-live="polite"></div>';
+    var svgEl = el.querySelector('svg');
+    var live = el.querySelector('[aria-live]');
+    st.tip = makeTip(el);
+    var cur = -1;
+    function show(i, announce) {
+      i = clamp(i, 0, n - 1);
+      cur = i;
+      var it = items[i];
+      el.classList.add('is-hovering');
+      Array.prototype.forEach.call(svgEl.querySelectorAll('.chart__bar'), function (b) { b.classList.remove('is-hot'); });
+      var bar = svgEl.querySelector('.chart__row[data-i="' + i + '"] .chart__bar');
+      if (bar) bar.classList.add('is-hot');
+      var tipRows = [{ color: it.color, swatch: true, value: valTxt[i], name: '' }];
+      if (thr !== null && it.value !== null && it.value >= thr) tipRows.push({ value: 'أعلى من الحد', name: '' });
+      fillTip(st.tip, it.label, tipRows);
+      var bw = it.value !== null && it.value > 0 ? clamp(it.value / max, 0, 1) * barMax : 0;
+      placeTip(st, st.tip, Math.max(xR - bw, 8), topPad + i * rowH + rowH / 2, svgEl);
+      if (announce && live) live.textContent = it.label + ': ' + valTxt[i];
+    }
+    function hide() {
+      cur = -1;
+      Array.prototype.forEach.call(svgEl.querySelectorAll('.chart__bar.is-hot'), function (b) { b.classList.remove('is-hot'); });
+      hideTip(st);
+    }
+    function onPtr(ev) {
+      var row = ev.target.closest && ev.target.closest('.chart__row');
+      if (row) show(+row.getAttribute('data-i'), false); else hide();
+    }
+    svgEl.addEventListener('pointermove', onPtr);
+    svgEl.addEventListener('pointerdown', onPtr);
+    svgEl.addEventListener('pointerleave', function (ev) { if (ev.pointerType === 'mouse') hide(); });
+    svgEl.addEventListener('pointerup', function (ev) { if (ev.pointerType !== 'mouse') touchHide(st, hide); });
+    svgEl.addEventListener('focus', function () { show(cur >= 0 ? cur : 0, true); });
+    svgEl.addEventListener('blur', hide);
+    svgEl.addEventListener('keydown', function (ev) {
+      if (ev.key === 'ArrowDown' || ev.key === 'ArrowLeft') { ev.preventDefault(); show(cur + 1, true); }
+      else if (ev.key === 'ArrowUp' || ev.key === 'ArrowRight') { ev.preventDefault(); show(cur - 1, true); }
+      else if (ev.key === 'Home') { ev.preventDefault(); show(0, true); }
+      else if (ev.key === 'End') { ev.preventDefault(); show(n - 1, true); }
+      else if (ev.key === 'Escape') hide();
+    });
+  }
+
+  /* ---- donut (part-to-whole, ≤ 6 slices) */
+  function polar(cx, cy, r, deg) {
+    var a = (deg - 90) * Math.PI / 180;
+    return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  }
+  function drawDonut(st) {
+    var o = st.opts, el = st.el, W = st.width;
+    var items = (o.items || []).map(function (it, i) {
+      var v = toNum(it && it.value);
+      return { label: it && it.label !== undefined ? String(it.label) : '', value: v !== null && v > 0 ? v : 0, color: safeColor(it && it.color, SERIES[i % SERIES.length]) };
+    });
+    var total = items.reduce(function (a, b) { return a + b.value; }, 0);
+    if (!items.length || total <= 0) { emptyChart(el, o.emptyText); return; }
+    var size = +o.size || (W < 380 ? 148 : 168);
+    var R = size / 2, thick = Math.max(16, Math.round(size * 0.15)), r0 = R - thick, c = R;
+    var pctOf = function (v) { return round1(v / total * 100); };
+    var unit = o.unit === undefined ? '' : String(o.unit);
+    var s = '', a0 = 0;
+    items.forEach(function (it, i) {
+      if (!it.value) return;
+      var sweep = it.value / total * 360;
+      var d;
+      if (sweep >= 359.99) {
+        d = 'M' + f2(c) + ' ' + f2(c - R) + 'A' + R + ' ' + R + ' 0 1 1 ' + f2(c) + ' ' + f2(c + R) + 'A' + R + ' ' + R + ' 0 1 1 ' + f2(c) + ' ' + f2(c - R) + 'Z' +
+          'M' + f2(c) + ' ' + f2(c - r0) + 'A' + r0 + ' ' + r0 + ' 0 1 0 ' + f2(c) + ' ' + f2(c + r0) + 'A' + r0 + ' ' + r0 + ' 0 1 0 ' + f2(c) + ' ' + f2(c - r0) + 'Z';
+      } else {
+        var a1 = a0 + sweep, large = sweep > 180 ? 1 : 0;
+        var p1 = polar(c, c, R, a0), p2 = polar(c, c, R, a1), p3 = polar(c, c, r0, a1), p4 = polar(c, c, r0, a0);
+        d = 'M' + f2(p1[0]) + ' ' + f2(p1[1]) + 'A' + R + ' ' + R + ' 0 ' + large + ' 1 ' + f2(p2[0]) + ' ' + f2(p2[1]) +
+          'L' + f2(p3[0]) + ' ' + f2(p3[1]) + 'A' + r0 + ' ' + r0 + ' 0 ' + large + ' 0 ' + f2(p4[0]) + ' ' + f2(p4[1]) + 'Z';
+      }
+      var mid = polar(c, c, (R + r0) / 2, a0 + sweep / 2);
+      s += '<path class="chart__seg" data-i="' + i + '" data-x="' + f2(mid[0]) + '" data-y="' + f2(mid[1]) + '" fill-rule="evenodd" d="' + d + '" style="fill:' + it.color + '" tabindex="0" role="img" aria-label="' +
+        esc(it.label + ': ' + App.fmt.num(it.value) + unit + ' (' + App.fmt.pct(pctOf(it.value)) + ')') + '"/>';
+      a0 += sweep;
+    });
+    var centerVal = o.centerValue !== undefined ? String(o.centerValue) : App.fmt.num(total);
+    var centerLbl = o.centerLabel !== undefined ? String(o.centerLabel) : 'الإجمالي';
+    var aria = o.ariaLabel || ('رسم دائري: ' + items.map(function (it) { return it.label + ' ' + App.fmt.pct(pctOf(it.value)); }).join('، '));
+    var list = '<ul class="chart__list">' + items.map(function (it, i) {
+      return '<li data-i="' + i + '"><span class="chart__swatch" style="background:' + it.color + '"></span>' +
+        '<span class="chart__list-name">' + esc(it.label) + '</span>' +
+        '<span class="chart__list-val num">' + esc(App.fmt.num(it.value) + unit) + '</span>' +
+        '<span class="chart__list-pct num">' + esc(App.fmt.pct(pctOf(it.value))) + '</span></li>';
+    }).join('') + '</ul>';
+    el.innerHTML = '<div class="chart__donut" style="width:' + size + 'px;height:' + size + 'px">' +
+      '<svg class="chart__svg" viewBox="0 0 ' + size + ' ' + size + '" width="' + size + '" height="' + size + '" role="group" aria-label="' + esc(aria) + '">' + s + '</svg>' +
+      '<div class="chart__center" aria-hidden="true"><strong>' + esc(centerVal) + '</strong><span>' + esc(centerLbl) + '</span></div></div>' + list;
+    var svgEl = el.querySelector('svg');
+    var donutEl = el.querySelector('.chart__donut');
+    st.tip = makeTip(el);
+    function show(i) {
+      var it = items[i];
+      if (!it) return;
+      el.classList.add('is-hovering');
+      Array.prototype.forEach.call(el.querySelectorAll('.chart__seg, .chart__list li'), function (n) { n.classList.toggle('is-hot', +n.getAttribute('data-i') === i); });
+      var seg = svgEl.querySelector('.chart__seg[data-i="' + i + '"]');
+      fillTip(st.tip, it.label, [{ color: it.color, swatch: true, value: App.fmt.num(it.value) + unit + ' · ' + App.fmt.pct(pctOf(it.value)), name: '' }]);
+      if (seg) {
+        st.tip.classList.add('is-on');
+        var tw = st.tip.offsetWidth, th = st.tip.offsetHeight;
+        var x = donutEl.offsetLeft + (+seg.getAttribute('data-x')), y = donutEl.offsetTop + (+seg.getAttribute('data-y'));
+        st.tip.style.left = f2(clamp(x - tw / 2, 0, Math.max(0, el.clientWidth - tw))) + 'px';
+        st.tip.style.top = f2(Math.max(0, y - th - 10)) + 'px';
+      } else {
+        st.tip.classList.remove('is-on');
+      }
+    }
+    function hide() {
+      Array.prototype.forEach.call(el.querySelectorAll('.is-hot'), function (n) { n.classList.remove('is-hot'); });
+      hideTip(st);
+    }
+    el.addEventListener('pointerover', function (ev) {
+      var t = ev.target.closest && ev.target.closest('[data-i]');
+      if (t && el.contains(t)) show(+t.getAttribute('data-i'));
+    });
+    el.addEventListener('pointerleave', hide);
+    svgEl.addEventListener('focusin', function (ev) { var t = ev.target.closest('[data-i]'); if (t) show(+t.getAttribute('data-i')); });
+    svgEl.addEventListener('focusout', hide);
+  }
+
+  App.svg = {
+    line: function (container, opts) { return mountChart(container, opts, drawLine); },
+    bars: function (container, opts) { return mountChart(container, opts, drawBars); },
+    donut: function (container, opts) { return mountChart(container, opts, drawDonut, 'chart--donut'); },
+    ring: function (value, opts) {
+      var o = opts || {};
+      var size = Math.max(24, +o.size || 64);
+      var sw = Math.max(2, +o.stroke || 8);
+      var v = toNum(value);
+      var has = v !== null;
+      var p = has ? clamp(v, 0, 1) : 0;
+      var r = (size - sw) / 2;
+      var C = 2 * Math.PI * r;
+      var color = safeColor(o.color, 'var(--primary)');
+      var track = safeColor(o.track, '');
+      var text = o.text !== undefined && o.text !== null ? String(o.text) : (has ? App.fmt.pct(Math.round(p * 100)) : '—');
+      var fs = o.fontSize ? +o.fontSize : Math.round(size * (text.length <= 4 ? 0.25 : text.length <= 6 ? 0.21 : 0.17));
+      var label = o.label ? String(o.label) : text;
+      var bar = '';
+      if (has && p > 0) {
+        var off = p >= 1 ? 0 : C * (1 - p);
+        bar = '<circle class="ring__bar" cx="' + f2(size / 2) + '" cy="' + f2(size / 2) + '" r="' + f2(r) + '" fill="none" stroke-width="' + sw + '"' +
+          ' stroke-linecap="' + (p >= 1 ? 'butt' : 'round') + '" stroke-dasharray="' + f2(C) + '" stroke-dashoffset="' + f2(off) + '"' +
+          ' transform="rotate(-90 ' + f2(size / 2) + ' ' + f2(size / 2) + ')" style="stroke:' + color + ';--ring-c:' + f2(C) + '"/>';
+      }
+      return new SafeHtml(
+        '<span class="ring" role="img" aria-label="' + esc(label) + '" style="width:' + size + 'px;height:' + size + 'px">' +
+        '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '" aria-hidden="true" focusable="false">' +
+        '<circle class="ring__track" cx="' + f2(size / 2) + '" cy="' + f2(size / 2) + '" r="' + f2(r) + '" fill="none" stroke-width="' + sw + '"' + (track ? ' style="stroke:' + track + '"' : '') + '/>' +
+        bar + '</svg><span class="ring__text" style="font-size:' + fs + 'px">' + esc(text) + '</span></span>'
+      );
+    }
+  };
+
+  /* ------------------------------------------------------------ bootstrap */
+  function onReady() { if (doc.body) ensureToastHost(); }
+  if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', onReady); else onReady();
+
+  global.App = App;
+})(window);
+</script>
