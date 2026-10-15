@@ -14,13 +14,17 @@
  * dist/Code.gs = a short Arabic/English header (what it is, version, the 4 install steps, «لا تعدّل هذا الملف»)
  *              + src/Code.gs byte for byte
  *              + `var NABD_EMBEDDED_FILES_ = {…};` — Styles, Common, School, Admin (then any other src/*.html,
- *                sorted) as JSON string literals. Code.gs reads them through embeddedHtml_(), so the pasted
- *                project needs no .html files.
- * The right-hand side of that declaration is plain JSON (other tools may JSON.parse it). On top of what
- * JSON.stringify escapes, every invisible / format / bidi-control / non-ASCII-space / private-use character is
- * written as a \uXXXX escape: a copy-paste or an editor cannot silently drop or change it, and U+2028/U+2029
- * never appear raw. The literals contain no raw line breaks, so CRLF conversion cannot change them either.
- * Every build re-reads its own output and checks it (syntax + byte-exact round-trip) before writing.
+ *                sorted), each as `[ "…", "…" ].join('')`: an array of JSON string literals, one per line.
+ *                Code.gs reads them through embeddedHtml_(), so the pasted project needs no .html files.
+ * No line of the bundle is longer than MAX_LINE (4,000) characters: very long lines make the Apps Script
+ * editor sluggish and are what copy-paste tools truncate. A page is cut into chunks at its own line breaks
+ * (a longer source line is cut between characters, never inside a surrogate pair), and each chunk is encoded
+ * on its own, so no escape sequence is ever split; joining the chunks gives back the page byte for byte.
+ * Each chunk line is a JSON string literal (other tools may JSON.parse it). On top of what JSON.stringify
+ * escapes, every invisible / format / bidi-control / non-ASCII-space / private-use character is written as a
+ * \uXXXX escape: a copy-paste or an editor cannot silently drop or change it, and U+2028/U+2029 never appear
+ * raw. The literals contain no raw line breaks, so CRLF conversion cannot change them either.
+ * Every build re-reads its own output and checks it (syntax, line lengths, byte-exact round-trip) before writing.
  * Deterministic: no timestamps, no absolute paths, no locale/time-zone/Unicode-version dependence.
  */
 'use strict';
@@ -33,7 +37,10 @@ const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_SRC = path.join(ROOT, 'src');
 const DEFAULT_OUT = path.join(ROOT, 'dist');
 /** Bump when the bundle layout changes (it is part of the build id). */
-const BUNDLE_FORMAT = 1;
+const BUNDLE_FORMAT = 2;
+/** Longest line the bundle may contain (characters). */
+const MAX_LINE = 4000;
+const CHUNK_INDENT = '    ';
 /** Embedded in this order; any other src/*.html follows, sorted by name. */
 const PAGE_ORDER = ['Styles', 'Common', 'School', 'Admin'];
 const EMBED_VAR = 'NABD_EMBEDDED_FILES_';
@@ -100,6 +107,32 @@ function jsonLiteral(s) {
   }
   out.push(json.slice(plain));
   return out.join('');
+}
+
+/**
+ * Cuts `text` into pieces whose JSON literals fit on one bundle line (indent + literal + comma ≤ MAX_LINE).
+ * Pieces end at the page's own line breaks where possible; a longer line is cut between code points (never
+ * inside a surrogate pair). Each piece is encoded on its own, so no escape is ever split. join('') === text.
+ */
+function chunkText(text) {
+  const budget = MAX_LINE - CHUNK_INDENT.length - 1;
+  const inner = (t) => jsonLiteral(t).length - 2;   // literal length without its quotes (additive at these cuts)
+  const out = [];
+  let cur = '', len = 2;
+  const flush = () => { if (cur) out.push(cur); cur = ''; len = 2; };
+  for (const line of String(text).match(/[^\n]*\n|[^\n]+$/g) || []) {
+    const n = inner(line);
+    if (len + n <= budget) { cur += line; len += n; continue; }
+    flush();
+    if (2 + n <= budget) { cur = line; len = 2 + n; continue; }
+    for (const ch of line) {   // for…of walks code points: a surrogate pair stays in one piece
+      const c = inner(ch);
+      if (len + c > budget) flush();
+      cur += ch; len += c;
+    }
+  }
+  flush();
+  return out.length ? out : [''];
 }
 
 /* ------------------------------------------------------------------ checks on src */
@@ -194,16 +227,25 @@ function embedBlock(pages) {
     '',
     '// ' + RULE,
     '// Embedded pages — src/' + pages.map((p) => p.name + '.html').join(', src/') + ',',
-    '// written by tools/build-bundle.js as JSON strings and served by embeddedHtml_(). Do not edit by hand.',
+    '// written by tools/build-bundle.js as JSON string chunks (one per line, ≤ ' + MAX_LINE.toLocaleString('en-US') +
+      ' characters) and served by embeddedHtml_(). Do not edit by hand.',
     '// ' + RULE,
     'var ' + EMBED_VAR + ' = {'
   ];
-  pages.forEach((p, i) => lines.push('  ' + JSON.stringify(p.name) + ': ' + jsonLiteral(p.text) + (i < pages.length - 1 ? ',' : '')));
+  pages.forEach((p, i) => {
+    const parts = chunkText(p.text);
+    lines.push('  ' + JSON.stringify(p.name) + ': [');
+    parts.forEach((c, k) => lines.push(CHUNK_INDENT + jsonLiteral(c) + (k < parts.length - 1 ? ',' : '')));
+    lines.push("  ].join('')" + (i < pages.length - 1 ? ',' : ''));
+  });
   lines.push('};', '');
   return lines.join('\n');
 }
 
-/** The embedded map as it reads back from bundle text: JSON (format check) and JS (what Apps Script runs). */
+/**
+ * The embedded map as it reads back from bundle text: JSON (a strict line-by-line parse of the layout, every
+ * chunk through JSON.parse — the format check) and JS (what Apps Script runs). chunks: name → chunk strings.
+ */
 function readEmbedded(code) {
   const marker = '\nvar ' + EMBED_VAR + ' = ';
   const at = code.indexOf(marker);
@@ -211,11 +253,34 @@ function readEmbedded(code) {
   const tail = code.slice(at + marker.length);
   if (!/\};\n$/.test(tail)) fail('bundle: the embedded map must be the last statement of the file');
   const rhs = tail.slice(0, -2);
-  return { json: JSON.parse(rhs), js: vm.runInNewContext('(' + rhs + '\n)', {}) };
+  const lines = rhs.split('\n');
+  if (lines[0] !== '{' || lines[lines.length - 1] !== '}') fail('bundle: the embedded map must open and close on lines of their own');
+  const json = {}, chunks = {};
+  let name = null, i = 1;
+  for (; i < lines.length - 1; i++) {
+    const ln = lines[i];
+    let m;
+    if (name === null) {
+      if (!(m = /^  ("(?:[^"\\]|\\.)*"): \[$/.exec(ln))) fail('bundle: unexpected line ' + (i + 1) + ' of the embedded map');
+      name = JSON.parse(m[1]);
+      chunks[name] = [];
+    } else if ((m = /^\s{4}(".*")(,?)$/.exec(ln))) {
+      chunks[name].push(JSON.parse(m[1]));
+    } else if ((m = /^  \]\.join\(''\)(,?)$/.exec(ln))) {
+      json[name] = chunks[name].join('');
+      if (!m[1] && i !== lines.length - 2) fail('bundle: a page other than the last has no trailing comma');
+      name = null;
+    } else fail('bundle: unexpected line ' + (i + 1) + ' of the embedded map');
+  }
+  if (name !== null) fail('bundle: unterminated page ' + name);
+  return { json, js: vm.runInNewContext('(' + rhs + '\n)', {}), chunks };
 }
 
 function verify(code, inp) {
   try { new vm.Script(code, { filename: 'dist/Code.gs' }); } catch (e) { fail('bundle has a syntax error: ' + e.message); }
+  code.split('\n').forEach((ln, i) => {
+    if (ln.length > MAX_LINE) fail('bundle: line ' + (i + 1) + ' has ' + ln.length + ' characters (max ' + MAX_LINE + ')');
+  });
   const back = readEmbedded(code);
   const names = inp.pages.map((p) => p.name);
   for (const k of ['json', 'js']) {
@@ -355,6 +420,7 @@ function main(argv) {
   }
 }
 
-module.exports = { bundle, build, check, jsonLiteral, mustEscape, readEmbedded, header, BUNDLE_FORMAT, PAGE_ORDER, EMBED_VAR, BuildError };
+module.exports = { bundle, build, check, jsonLiteral, chunkText, mustEscape, readEmbedded, header, BUNDLE_FORMAT, MAX_LINE, PAGE_ORDER, EMBED_VAR,
+  BuildError };
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));

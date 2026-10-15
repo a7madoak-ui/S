@@ -1,7 +1,7 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════
  *  نبض المدارس (Nabd) — «متابعة سير العملية التعليمية»
- *  Server code for Google Apps Script (V8 runtime) — version 1.2.0
+ *  Server code for Google Apps Script (V8 runtime) — version 1.2.1
  *
  *  This is a single file on purpose, so a supervisor can paste it into the
  *  Apps Script editor without juggling many files.
@@ -40,7 +40,7 @@
 
 const APP_NAME = 'نبض المدارس';
 const DEFAULT_SYSTEM_TITLE = 'متابعة سير العملية التعليمية';
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 const TZ = 'Asia/Riyadh';
 
 const SH_SCHOOLS = 'المدارس';
@@ -60,9 +60,14 @@ const LIMITS_ = Object.freeze({
   otpPer6h: 10,              // protects the owner's daily Gmail quota (~100 emails)
   otpTries: 5,
   pinWindowSec: 900,         // 15 minutes
-  pinTries: 5,
+  pinTries: 5,               // wrong school codes per school per window
+  pinTriesAll: 20,           // … over ALL schools per window (the picker lists every school to anyone)
+  pinTriesDay: 60,           // … over all schools per day: more schools never means faster guessing
   submitsPerDay: 30,
   uploadsPerDay: 40,
+  uploadBytesPerDay: 300 * 1024 * 1024,   // all schools together: the owner's Drive is shared with Gmail
+  driveFullRatio: 0.9,       // uploads stop once the owner's storage is this full
+  orphanDays: 3,             // an upload no saved report uses is trashed after this many days
   counterTtlSec: 21600,      // CacheService maximum (6 h)
   photoMaxBytes: 3 * 1024 * 1024,
   sessionDays: 30,
@@ -126,6 +131,10 @@ const LOG_HEADERS_ = Object.freeze(['الوقت', 'العملية', 'التفا�
 const LOG_FORMATS_ = Object.freeze(['@', '@', '@']);
 const LOG_WIDTHS_ = Object.freeze([160, 200, 520]);
 
+/** The owner's way in that no visitor can block: a one-time sign-in link from the spreadsheet menu (no email). */
+const OTP_MENU_HINT_ = 'أو ادخل الآن دون رمز من ملف Google Sheets: القائمة «📋 نبض المدارس» ← «🔗 رابط لوحة التحكم» ← ' +
+  '«فتح لوحة التحكم».';
+
 const MSG_ = Object.freeze({
   BAD_LINK: 'الرابط غير صحيح أو تم تغييره. تواصل مع المشرف للحصول على الرابط الجديد.',
   INACTIVE: 'هذه المدرسة موقوفة مؤقتًا من قبل المشرف.',
@@ -135,10 +144,11 @@ const MSG_ = Object.freeze({
   CLOSED: 'انتهى وقت الإرسال لهذا اليوم. تواصل مع المشرف.',
   PIN_WRONG: 'رمز المدرسة غير صحيح',
   PIN_LOCKED: 'محاولات كثيرة، حاول بعد ربع ساعة',
+  PIN_PAUSED: 'الدخول برمز المدرسة متوقف مؤقتًا بسبب محاولات خاطئة كثيرة. استخدم رابط مدرستك الخاص، أو حاول لاحقًا.',
   GENERAL_OFF: 'الرابط العام غير مفعّل. استخدم رابط مدرستك الخاص.',
-  OTP_COOLDOWN: 'انتظر دقيقة قبل طلب رمز جديد',
-  OTP_HOURLY: 'طلبت رموزًا كثيرة خلال ساعة. حاول مرة أخرى بعد قليل.',
-  OTP_MANY: 'طلبت رموزًا كثيرة خلال الساعات الماضية. حاول مرة أخرى بعد بضع ساعات.',
+  OTP_COOLDOWN: 'انتظر دقيقة قبل طلب رمز جديد. ' + OTP_MENU_HINT_,
+  OTP_HOURLY: 'طُلبت رموز كثيرة خلال ساعة. حاول مرة أخرى بعد قليل، ' + OTP_MENU_HINT_,
+  OTP_MANY: 'طُلبت رموز كثيرة خلال الساعات الماضية. حاول مرة أخرى بعد بضع ساعات، ' + OTP_MENU_HINT_,
   OTP_TOO_MANY: 'تجاوزت عدد المحاولات، اطلب رمزًا جديدًا',
   OTP_EXPIRED: 'انتهت صلاحية الرمز، اطلب رمزًا جديدًا',
   SETUP_DONE: 'تم تجهيز النظام مسبقًا',
@@ -154,7 +164,8 @@ const MSG_ = Object.freeze({
     'القائمة «📋 نبض المدارس» ← «📖 خطوات التشغيل»، ثم اختيار «تحديد الكل» ← «متابعة» في نافذة الأذونات.',
   PERM_DRIVE: 'لم تُمنح صلاحية Google Drive اللازمة لحفظ صور الشواهد. على المشرف فتح ملف Google Sheets الخاص ' +
     'بالبرنامج ← القائمة «📋 نبض المدارس» ← «📖 خطوات التشغيل»، ثم اختيار «تحديد الكل» ← «متابعة» في نافذة الأذونات.',
-  DRIVE_FULL: 'تعذّر حفظ الصورة لأن مساحة Google Drive لدى المشرف ممتلئة. أرسل التقرير بدون صور وأبلغ المشرف.'
+  DRIVE_FULL: 'تعذّر حفظ الصورة لأن مساحة Google Drive لدى المشرف ممتلئة. أرسل التقرير بدون صور وأبلغ المشرف.',
+  UPLOADS_FULL: 'تعذّر حفظ الصورة لأن صور الشواهد اليوم بلغت الحد اليومي للنظام. أرسل التقرير بدون صور وأبلغ المشرف.'
 });
 
 const DEFAULT_MESSAGE_TEMPLATE = [
@@ -466,14 +477,18 @@ function randStr_(n, alphabet) {
   return out.join('');
 }
 
-function sha256Hex_(s) {
-  const d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(s), Utilities.Charset.UTF_8);
+/** Signed byte array (Utilities digests / signatures) → lowercase hex. */
+function bytesHex_(d) {
   let hex = '';
   for (let i = 0; i < d.length; i++) {
     const b = d[i] & 0xFF;
     hex += (b < 16 ? '0' : '') + b.toString(16);
   }
   return hex;
+}
+
+function sha256Hex_(s) {
+  return bytesHex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(s), Utilities.Charset.UTF_8));
 }
 
 function newSchoolToken_() { return randStr_(1, LETTERS_) + randStr_(19, ALNUM_); }
@@ -1546,6 +1561,24 @@ function windowIncr_(key, windowSec) {
   return w.n;
 }
 
+/**
+ * Today's durable counters ({key: n}, one Script Property that starts over when the Riyadh date changes).
+ * A cache entry lives 6 h at most and may be evicted sooner, so a cache counter cannot hold a daily cap;
+ * the caps that protect the owner's Drive and the general link are counted here. Write inside withLock_.
+ */
+function dailyCounts_() {
+  const v = readJsonProp_('counts', null);
+  return isObj_(v) && v.d === todayStr_() && isObj_(v.n) ? v.n : {};
+}
+function dailyCount_(key) { return Number(dailyCounts_()[key]) || 0; }
+/** Adds {key: amount, …} to today's counters; returns the new counts. */
+function dailyAdd_(adds) {
+  const n = dailyCounts_();
+  Object.keys(adds).forEach((k) => { n[k] = (Number(n[k]) || 0) + adds[k]; });
+  setBigProp_('counts', JSON.stringify({ d: todayStr_(), n: n }));
+  return n;
+}
+
 // ---------- config ----------
 
 function cfg_() {
@@ -2112,12 +2145,39 @@ function schoolById_(id) {
   return null;
 }
 
-/** Exact-match lookup by private token. */
+/** Lookup by private token (exact match) or by a credential the general link handed out (generalToken_). */
 function schoolByToken_(token) {
   if (typeof token !== 'string' || !/^[A-Za-z0-9]{12,64}$/.test(token)) return null;
   const list = readSchools_();
   for (let i = 0; i < list.length; i++) if (list[i].token && safeEq_(list[i].token, token)) return list[i];
+  if (!GENERAL_TOKEN_RE_.test(token) || !secret_(false)) return null;
+  for (let i = 0; i < list.length; i++) if (list[i].token && safeEq_(generalToken_(list[i]), token)) return list[i];
   return null;
+}
+
+/** Per-install key for derived credentials (created on first use; a reset or a copied project gets a new one). */
+function secret_(create) {
+  if (MEMO_.secret) return MEMO_.secret;
+  const p = props_();
+  const s = p.getProperty('secret');
+  if (s || !create) return (MEMO_.secret = s || null);
+  return withLock_(() => {
+    let x = p.getProperty('secret');
+    if (!x) { x = newSessionToken_(); p.setProperty('secret', x); }
+    return (MEMO_.secret = x);
+  });
+}
+
+const GENERAL_TOKEN_RE_ = /^g[a-f0-9]{32}$/;
+/**
+ * What the general link hands out for (school, code) — never the private link itself: an HMAC of the
+ * school's id, private token and CURRENT code. «رمز جديد» (or «رابط جديد») therefore signs out every device
+ * that entered the old code, and such a device cannot turn what it stored into the permanent private link.
+ */
+function generalToken_(s) {
+  const mac = Utilities.computeHmacSha256Signature('general:' + s.id + ':' + s.token + ':' + s.pin, secret_(true),
+    Utilities.Charset.UTF_8);
+  return 'g' + bytesHex_(mac).slice(0, 32);
 }
 
 /** A new school record with unique id/token/pin. */
@@ -2578,6 +2638,75 @@ function cleanupPhotos_(schoolId, ids, exceptKey) {
   }
 }
 
+/** Photos of a report the supervisor deleted: kept by the orphan sweep (deleting a report never deletes its photos). */
+function keepPhotos_(ids) {
+  if (!ids || !ids.length) return;
+  const today = todayStr_(), old = addDays_(today, -14);
+  const keep = readJsonProp_('photoKeep', {});
+  const out = {};
+  Object.keys(isObj_(keep) ? keep : {}).forEach((id) => { if (String(keep[id]) >= old) out[id] = keep[id]; });
+  ids.forEach((id) => { out[id] = today; });
+  setBigProp_('photoKeep', JSON.stringify(out));
+}
+
+/** Photo ids used by reports saved on or after `fromDate` (a photo is always saved after it was uploaded). */
+function photosUsedSince_(fromDate) {
+  const sh = sheet_(SH_REPORTS);
+  const last = sh.getLastRow();
+  if (last < 2) return {};
+  const col = REPORT_COLS_.indexOf('updatedAt') + 1;
+  const recent = [];
+  sh.getRange(2, col, last - 1, 1).getValues().forEach((v, i) => {
+    const ts = cellStr_(v[0]).trim();
+    if (!/^\d{4}-\d{2}-\d{2}/.test(ts) || ts.slice(0, 10) >= fromDate) recent.push({ row: i + 2 });   // unreadable → kept
+  });
+  const used = {};
+  readRecords_(recent).forEach((r) => { photoIds_(r.answers).forEach((id) => { used[id] = true; }); });
+  return used;
+}
+
+/**
+ * Trashes evidence uploads that no saved report uses, LIMITS_.orphanDays days after their upload (an abandoned
+ * draft — or uploads made only to fill the owner's Drive). Runs at most once a day (dashboard bootstrap, digest
+ * trigger), looks at the current photos folder only, and stops after `budgetMs`; the next run continues.
+ * Never throws.
+ */
+function sweepOrphanPhotos_(budgetMs) {
+  try {
+    const p = props_();
+    const until = addDays_(todayStr_(), -LIMITS_.orphanDays);
+    const done = String(p.getProperty('photoSweep') || '');
+    if (done >= until) return;
+    const first = addDays_(until, -7);                       // never looks further back than a week
+    let day = done && done >= first ? addDays_(done, 1) : first;
+    const folder = photosFolder_(false);
+    if (!folder) { p.setProperty('photoSweep', until); return; }
+    const t0 = Date.now();
+    const used = photosUsedSince_(day);
+    const kept = readJsonProp_('photoKeep', {});
+    const nameRe = /^(\d{4}-\d{2}-\d{2})_[A-Za-z0-9_-]{1,20}_[a-z0-9]{6}\.(?:jpg|png|webp)$/;
+    const rfc = (iso) => new Date(parseIso_(iso)).toISOString().slice(0, 19);
+    for (; day <= until; day = addDays_(day, 1)) {
+      if (Date.now() - t0 > budgetMs) return;
+      // Drive's modified time is UTC: a day either side covers Riyadh's date; the file name decides.
+      const it = folder.searchFiles('trashed = false and modifiedDate >= \'' + rfc(addDays_(day, -1)) +
+        '\' and modifiedDate < \'' + rfc(addDays_(day, 2)) + '\'');
+      while (it.hasNext()) {
+        if (Date.now() - t0 > budgetMs) return;
+        const f = it.next();
+        const m = nameRe.exec(String(f.getName() || ''));
+        if (!m || m[1] !== day) continue;
+        const id = f.getId();
+        if (used[id] || (isObj_(kept) && kept[id])) continue;
+        try { f.setTrashed(true); } catch (e) { /* already gone */ }
+      }
+      p.setProperty('photoSweep', day);
+    }
+  } catch (e) {
+    try { console.warn('photo sweep failed: ' + e); } catch (ignore) { /* no console */ }
+  }
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 7. Bootstrap & routing
@@ -2656,7 +2785,8 @@ function captureWebAppUrl_() {
 
 /**
  * Web-app entry: ?s=<token> (school form; &d=<yyyy-MM-dd> opens a late / correction report of that
- * day when allowed), ?f=all (school picker), otherwise the supervisor page.
+ * day when allowed), ?f=all (school picker), otherwise the supervisor page (?login=<ticket>: the one-time sign-in
+ * link of the spreadsheet menu — BOOT.session carries the new session when the ticket is valid).
  */
 function doGet(e) {
   try {
@@ -2679,6 +2809,8 @@ function doGet(e) {
     }
     captureWebAppUrl_();
     const boot = Object.assign({ page: 'admin' }, base, { status: publicStatus_() });
+    const session = p.login && c.setupDone ? redeemLoginTicket_(String(p.login).trim()) : null;   // the menu's link
+    if (session) boot.session = session;
     return renderPage_('Admin', boot, c.systemTitle + ' — لوحة المشرف');
   } catch (err) {
     try { console.error((err && err.stack) || String(err)); } catch (ignore) { /* no console */ }
@@ -2907,7 +3039,12 @@ function api_schoolForm(schoolToken, date) {
   }, { school: true });
 }
 
-/** General link: exchange (schoolId, 4-digit school code) for the private token. */
+/**
+ * General link: exchange (schoolId, 4-digit school code) for a credential bound to that code (generalToken_).
+ * The picker lists every school to anyone, so wrong codes are limited per school AND over all schools (per
+ * 15 minutes and per day): guessing never gets faster with more schools. The limits are checked and counted
+ * under the lock, and the supervisor's log shows the first wrong code of each window.
+ */
 function api_resolveSchool(schoolId, pin) {
   return run_(() => {
     const c = cfg_();
@@ -2918,14 +3055,26 @@ function api_resolveSchool(schoolId, pin) {
     const code = normDigits_(typeof pin === 'string' || typeof pin === 'number' ? String(pin) : '').trim();
     if (!/^\d{4}$/.test(code)) fail_('رمز المدرسة 4 أرقام.');
     const key = 'pin:' + id;
-    if (cacheInt_(key) >= LIMITS_.pinTries) fail_(MSG_.PIN_LOCKED);
+    const refuse = () => {
+      if (cacheInt_(key) >= LIMITS_.pinTries) fail_(MSG_.PIN_LOCKED);
+      if (windowCount_('pin:all') >= LIMITS_.pinTriesAll || dailyCount_('pin') >= LIMITS_.pinTriesDay) fail_(MSG_.PIN_PAUSED);
+    };
+    refuse();   // cheap early answer while locked (no lock taken)
     const s = schoolById_(id);
     if (!s || !s.active) fail_('المدرسة غير متاحة. حدّث الصفحة واختر مدرستك من جديد.');
-    if (!safeEq_(s.pin, code)) {
-      withLock_(() => cacheIncr_(key, LIMITS_.pinWindowSec));
+    return withLock_(() => {
+      refuse();
+      if (safeEq_(s.pin, code)) return { ok: true, token: generalToken_(s) };
+      cacheIncr_(key, LIMITS_.pinWindowSec);
+      const inWindow = windowIncr_('pin:all', LIMITS_.pinWindowSec);
+      const today = dailyAdd_({ pin: 1 }).pin;
+      if (inWindow === 1) log_('رمز مدرسة غير صحيح', s.name + ' — من الرابط العام');
+      if (inWindow === LIMITS_.pinTriesAll || today === LIMITS_.pinTriesDay) {
+        log_('إيقاف مؤقت للدخول برمز المدرسة', 'محاولات خاطئة كثيرة على الرابط العام (' + today + ' اليوم). ' +
+          'الروابط الخاصة تعمل كالمعتاد؛ إن تكرر ذلك فأنشئ رموزًا جديدة للمدارس أو أوقف الرابط العام من الإعدادات.');
+      }
       fail_(MSG_.PIN_WRONG);
-    }
-    return { ok: true, token: s.token };
+    });
   }, { school: true });
 }
 
@@ -2944,23 +3093,31 @@ function api_uploadPhoto(schoolToken, payload) {
     if (!b64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) fail_('ملف الصورة تالف. جرّب صورة أخرى.');
 
     const today = todayStr_();
-    const upKey = 'up:' + school.id + ':' + today;
-    if (cacheInt_(upKey) >= LIMITS_.uploadsPerDay) {
-      fail_('تجاوزت الحد اليومي لرفع الصور (' + LIMITS_.uploadsPerDay + ' صورة). تواصل مع المشرف.');
-    }
+    const upKey = 'up:' + school.id;
+    const capMsg = 'تجاوزت الحد اليومي لرفع الصور (' + LIMITS_.uploadsPerDay + ' صورة). تواصل مع المشرف.';
+    if (dailyCount_(upKey) >= LIMITS_.uploadsPerDay) fail_(capMsg);
     let bytes;
     try { bytes = Utilities.base64Decode(b64); } catch (e) { fail_('ملف الصورة تالف. جرّب صورة أخرى.'); }
     if (!bytes || !bytes.length) fail_('ملف الصورة فارغ.');
     if (bytes.length > LIMITS_.photoMaxBytes) fail_('حجم الصورة أكبر من 3 ميجابايت. اختر صورة أصغر.');
     if (!imageMagicOk_(bytes, mime)) fail_('الملف المختار ليس صورة صالحة.');
 
-    // Rate counter + folder resolution under the lock; the Drive upload itself
-    // runs outside it so principals uploading at the same time do not queue.
+    // Daily caps (per school, and bytes over all schools) + folder resolution under the lock; the Drive upload
+    // itself runs outside it so principals uploading at the same time do not queue.
     const folder = withLock_(() => {
-      if (cacheInt_(upKey) >= LIMITS_.uploadsPerDay) {
-        fail_('تجاوزت الحد اليومي لرفع الصور (' + LIMITS_.uploadsPerDay + ' صورة). تواصل مع المشرف.');
+      const n = dailyCounts_();
+      if ((Number(n[upKey]) || 0) >= LIMITS_.uploadsPerDay) fail_(capMsg);
+      if ((Number(n.upb) || 0) + bytes.length > LIMITS_.uploadBytesPerDay) {
+        if (!n.upFull) {
+          dailyAdd_({ upFull: 1 });
+          log_('إيقاف رفع الصور لبقية اليوم', 'بلغت صور الشواهد اليوم ' + Math.round((Number(n.upb) || 0) / 1048576) +
+            ' ميجابايت (الحد اليومي لكل المدارس). آخر محاولة: ' + school.name);
+        }
+        fail_(MSG_.UPLOADS_FULL);
       }
-      cacheIncr_(upKey, LIMITS_.counterTtlSec);
+      const st = driveStorage_();
+      if (st && st.used >= st.limit * LIMITS_.driveFullRatio) fail_(MSG_.DRIVE_FULL);   // keep room for Gmail
+      dailyAdd_({ [upKey]: 1, upb: bytes.length });
       return photosFolder_(true);
     });
     const fileName = today + '_' + school.id + '_' + randStr_(6, LOWER_ALNUM_) + '.' + PHOTO_MIMES_[mime];
@@ -3038,10 +3195,9 @@ function api_submitReport(schoolToken, payload) {
       if (!isIsoDate_(pd) || pd > today) fail_(MSG_.NOT_EDITABLE);
       date = pd;
     }
-    const subKey = 'sub:' + school.id + ':' + today;
-    if (cacheInt_(subKey) >= LIMITS_.submitsPerDay) {
-      fail_('تجاوزت الحد اليومي لمرات الإرسال. تواصل مع المشرف.');
-    }
+    const subKey = 'sub:' + school.id;
+    const capMsg = 'تجاوزت الحد اليومي لمرات الإرسال. تواصل مع المشرف.';
+    if (dailyCount_(subKey) >= LIMITS_.submitsPerDay) fail_(capMsg);
     // Edit rules first (cheap and clearer than a field error); re-checked inside the lock.
     // A past date is accepted for a report returned for correction, or — with no report yet — for a
     // missed workday inside the late-reporting window (schedule.backfillDays).
@@ -3072,6 +3228,7 @@ function api_submitReport(schoolToken, payload) {
       const reviewEnabled = !!c.review.enabled;
       const old = findReport_(date, school.id);
       checkEditable(c, old);
+      if (dailyCount_(subKey) >= LIMITS_.submitsPerDay) fail_(capMsg);
       // Late: a missed day sent afterwards, or today's report after the deadline (never on an off day).
       const late = date !== today || pastDeadline_(c, today, now);
       const rec = old ? Object.assign({}, old) : {
@@ -3090,7 +3247,7 @@ function api_submitReport(schoolToken, payload) {
         rec.reviewedAt = '';
       }
       saveReport_(rec, true);
-      cacheIncr_(subKey, LIMITS_.counterTtlSec);
+      dailyAdd_({ [subKey]: 1 });
       const keep = toSet_(photoIds_(answers));
       const removed = old ? photoIds_(old.answers).filter((id) => !keep[id]) : [];
       return { rec: rec, removed: removed };
@@ -3151,7 +3308,47 @@ function pruneSessions_() {
   list.slice(LIMITS_.sessionsMax).forEach((x) => p.deleteProperty(x.k));
 }
 
-/** Sends a 6-digit login code to the owner's Gmail. */
+/** Opens a 30-day session (inside the lock); returns its token. Only a hash of the token is stored. */
+function newSession_(uaLabel) {
+  const token = newSessionToken_();
+  const ts = nowTs_();
+  const ua = cleanText_(uaLabel).slice(0, 60);
+  props_().setProperty(sessionKey_(token), JSON.stringify({
+    exp: Date.now() + LIMITS_.sessionDays * 86400000, created: ts, last: ts, ua: ua
+  }));
+  pruneSessions_();
+  log_('تسجيل دخول', ua || '');
+  return token;
+}
+
+/**
+ * Cache key of one emailed code. Every request is its own challenge (the id goes back to the page that asked),
+ * so wrong guesses sent by any other visitor can never use up — or wipe — the code the owner was just sent.
+ */
+function otpKey_(cid) { return 'otp:' + sha256Hex_(cid); }
+
+/**
+ * A one-time sign-in link for the spreadsheet menu (`?login=<ticket>`, 10 minutes). Only someone who can edit
+ * the file can run the menu, and no email is involved, so visitors who use up the login-code limits can never
+ * lock the owner out of the dashboard.
+ */
+function issueLoginTicket_() {
+  const ticket = newSessionToken_();
+  cache_().put('login:' + sha256Hex_(ticket), '1', LIMITS_.otpTtlSec);
+  return ticket;
+}
+/** Trades a menu ticket (once) for a new session token; null when unknown, used or expired. */
+function redeemLoginTicket_(ticket) {
+  if (typeof ticket !== 'string' || !/^[a-f0-9]{64}$/.test(ticket)) return null;
+  const key = 'login:' + sha256Hex_(ticket);
+  return withLock_(() => {
+    if (!cache_().get(key)) return null;
+    cache_().remove(key);
+    return newSession_('رابط الدخول من ملف Google Sheets');
+  });
+}
+
+/** Sends a 6-digit login code to the owner's Gmail; returns the challenge id the code belongs to. */
 function api_requestCode() {
   return run_(() => {
     const c = cfg_();
@@ -3168,6 +3365,7 @@ function api_requestCode() {
       try { quota = MailApp.getRemainingDailyQuota(); } catch (e) { quota = 1; }
       if (quota < 1) fail_('بلغ حسابك الحد اليومي لإرسال الرسائل من Google. حاول مرة أخرى غدًا.');
       const code = newOtpCode_();
+      const cid = newSessionToken_();
       const record = { h: sha256Hex_(code + ':' + cfg_().ssId), exp: Date.now() + LIMITS_.otpTtlSec * 1000, tries: 0 };
       try {
         MailApp.sendEmail({
@@ -3183,52 +3381,46 @@ function api_requestCode() {
         if (isPermErr_(e) || scopesMissing_()) fail_(MSG_.PERM_MISSING);
         fail_('تعذّر إرسال الرمز إلى بريدك الآن. حاول مرة أخرى بعد قليل.');
       }
-      cache.put('otp', JSON.stringify(record), LIMITS_.otpTtlSec);
+      cache.put(otpKey_(cid), JSON.stringify(record), LIMITS_.otpTtlSec);
       cache.put('otp_last', '1', LIMITS_.otpCooldownSec);
       windowIncr_('otp_hour', 3600);
       windowIncr_('otp_6h', LIMITS_.counterTtlSec);
-      return { ok: true, emailMasked: maskEmail_(c.ownerEmail) };
+      return { ok: true, cid: cid, emailMasked: maskEmail_(c.ownerEmail) };
     });
   });
 }
 
-/** Verifies the code and opens a 30-day session. */
-function api_verifyCode(code, uaLabel) {
+/** Verifies the code of challenge `cid` (from api_requestCode) and opens a 30-day session. */
+function api_verifyCode(cid, code, uaLabel) {
   return run_(() => {
     const digits = normDigits_(typeof code === 'string' || typeof code === 'number' ? String(code) : '')
       .replace(/\s+/g, '');
     if (!/^\d{6}$/.test(digits)) fail_('أدخل الرمز المكوّن من 6 أرقام.');
+    if (typeof cid !== 'string' || !/^[a-f0-9]{64}$/.test(cid)) fail_(MSG_.OTP_EXPIRED);
+    const key = otpKey_(cid);
     return withLock_(() => {
       const cache = cache_();
       let otp = null;
-      try { otp = JSON.parse(cache.get('otp') || 'null'); } catch (e) { otp = null; }
+      try { otp = JSON.parse(cache.get(key) || 'null'); } catch (e) { otp = null; }
       const now = Date.now();
       if (!isObj_(otp) || !(Number(otp.exp) > now)) {
-        cache.remove('otp');
+        cache.remove(key);
         fail_(MSG_.OTP_EXPIRED);
       }
       const ssId = cfg_().ssId;
       if (!safeEq_(otp.h, sha256Hex_(digits + ':' + ssId))) {
         otp.tries = (Number(otp.tries) || 0) + 1;
         if (otp.tries >= LIMITS_.otpTries) {
-          cache.remove('otp');
+          cache.remove(key);
           fail_(MSG_.OTP_TOO_MANY);
         }
-        cache.put('otp', JSON.stringify(otp), Math.max(1, Math.ceil((Number(otp.exp) - now) / 1000)));
+        cache.put(key, JSON.stringify(otp), Math.max(1, Math.ceil((Number(otp.exp) - now) / 1000)));
         const left = LIMITS_.otpTries - otp.tries;
         fail_('الرمز غير صحيح. ' + (left === 1 ? 'تبقّت محاولة واحدة.' : (left === 2 ? 'تبقّت محاولتان.' :
           'تبقّت ' + left + ' محاولات.')));
       }
-      cache.remove('otp');
-      const token = newSessionToken_();
-      const ts = nowTs_();
-      const ua = cleanText_(uaLabel).slice(0, 60);
-      props_().setProperty(sessionKey_(token), JSON.stringify({
-        exp: now + LIMITS_.sessionDays * 86400000, created: ts, last: ts, ua: ua
-      }));
-      pruneSessions_();
-      log_('تسجيل دخول', ua || '');
-      return { ok: true, token: token };
+      cache.remove(key);
+      return { ok: true, token: newSession_(uaLabel) };
     });
   });
 }
@@ -3348,6 +3540,7 @@ function api_bootstrap(token) {
   return run_(() => {
     requireAuth_(token);
     requireSetup_();
+    sweepOrphanPhotos_(4000);   // once a day, bounded
     const c = cfg_();
     const base = baseUrl_();
     let spreadsheetUrl = null;
@@ -3602,6 +3795,7 @@ function api_deleteReport(token, date, schoolId) {
     withLock_(() => {
       const r = findReport_(d, sid);
       if (!r) fail_(MSG_.REPORT_NOT_FOUND);
+      keepPhotos_(photoIds_(r.answers));   // its photos stay in Drive (never swept as unused uploads)
       deleteDataRow_(sheet_(SH_REPORTS), r.row);
       MEMO_.rIndex = null;
       log_('حذف تقرير', r.schoolName + ' — ' + d);
@@ -4159,6 +4353,7 @@ function dailyDigest(e) {
     bootstrap_({ menu: true });
     const c = cfg_();
     if (!c.setupDone || !c.digest.enabled || !c.ownerEmail) return;
+    sweepOrphanPhotos_(60000);
     const today = todayStr_();
     if (!isWorkday_(today, c.schedule.workdays, toSet_(holidays_()))) return;
     // At most one digest per day (guards against duplicate trigger runs).
@@ -4233,20 +4428,23 @@ function requireAllScopes_() {
 
 function menuShowLink() {
   requireAllScopes_();
+  const ui = SpreadsheetApp.getUi();   // first: from google.script.run (no UI) this throws before anything is issued
   try { bootstrap_({ menu: true }); } catch (e) { /* show the dialog anyway */ }
-  const ui = SpreadsheetApp.getUi();
   let url = null;
   try { url = baseUrlStored_(); } catch (e) { url = null; }   // never getUrl() here: it cannot know the deployment
   let html, title, h;
   if (url) {
+    let open = url;   // signs in directly (no emailed code) once the system is set up
+    try { if (cfg_().setupDone) open = linkWith_(url, 'login=' + issueLoginTicket_()); } catch (e) { open = url; }
     title = 'رابط لوحة التحكم';
-    h = 300;
+    h = 330;
     html = dialogHtml_(
       '<p>افتح هذا الرابط لإدارة المدارس ومتابعة التقارير. احفظه في المفضلة على جوالك وحاسوبك.</p>' +
       '<div class="url"><input id="u" readonly value="' + escHtml_(url) + '" onclick="this.select()">' +
       '<button class="btn s" onclick="var i=document.getElementById(\'u\');i.select();' +
       'try{document.execCommand(\'copy\');this.textContent=\'تم النسخ ✓\';}catch(e){}">نسخ</button></div>' +
-      '<p><a class="btn" href="' + escHtml_(url) + '" target="_blank" rel="noopener">فتح لوحة التحكم</a></p>' +
+      '<p><a class="btn" href="' + escHtml_(open) + '" target="_blank" rel="noopener">فتح لوحة التحكم</a></p>' +
+      (open !== url ? '<p class="muted">زر «فتح لوحة التحكم» يُدخلك مباشرة دون رمز بالبريد، مرة واحدة خلال 10 دقائق.</p>' : '') +
       '<p class="muted">روابط المدارس تجدها داخل اللوحة في قسم «المدارس». لا ترسل هذا الرابط للمدارس.</p>');
   } else {
     title = 'رابط لوحة التحكم غير محفوظ بعد';
@@ -4292,7 +4490,7 @@ function menuReset() {
       }
     });
     props_().deleteAllProperties();
-    try { cache_().removeAll(['otp', 'otp_last', 'otp_hour', 'otp_6h']); } catch (e) { /* ignore */ }
+    try { cache_().removeAll(['otp_last', 'otp_hour', 'otp_6h', 'pin:all']); } catch (e) { /* ignore */ }
   });
   bootstrap_({ menu: true });
   log_('تصفير النظام', '');

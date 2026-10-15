@@ -47,11 +47,44 @@ function srcPages() {
   const extra = fs.readdirSync(SRC).filter((f) => /\.html$/.test(f)).map((f) => f.slice(0, -5)).filter((n) => !PAGES.includes(n)).sort();
   return PAGES.concat(extra);
 }
+/**
+ * The embedded map read back line by line: `{`, then per page `  "<name>": [`, one JSON string literal per line
+ * (4-space indent, comma after all but the last), `  ].join('')` (comma after all but the last page), `}`.
+ * map: name → the chunks (each JSON.parse'd) joined; chunks: name → the chunk strings.
+ */
 function embeddedJson(text) {
   assert.equal(text.split(MARKER).length, 2, 'exactly one `var NABD_EMBEDDED_FILES_ = …` declaration');
-  const rhs = text.slice(text.indexOf(MARKER) + MARKER.length);
+  let rhs = text.slice(text.indexOf(MARKER) + MARKER.length);
   assert.match(rhs, /\};\n$/, 'the embedded map is the last statement');
-  return { rhs: rhs.slice(0, -2), map: JSON.parse(rhs.slice(0, -2)) };
+  rhs = rhs.slice(0, -2);
+  const lines = rhs.split('\n');
+  assert.equal(lines[0], '{');
+  assert.equal(lines[lines.length - 1], '}');
+  const map = {}, chunks = {};
+  let name = null;
+  lines.slice(1, -1).forEach((ln, i, all) => {
+    let m;
+    if (name === null) {
+      m = /^  ("[^"]+"): \[$/.exec(ln);
+      assert.ok(m, 'page header line: ' + ln.slice(0, 80));
+      name = JSON.parse(m[1]);
+      chunks[name] = [];
+      return;
+    }
+    if ((m = /^  \]\.join\(''\)(,?)$/.exec(ln))) {
+      assert.equal(m[1], i === all.length - 1 ? '' : ',', 'commas between pages only');
+      assert.equal(/,$/.test(all[i - 1]), false, 'no comma after the last chunk');
+      map[name] = chunks[name].join('');
+      name = null;
+      return;
+    }
+    m = /^ {4}(".*?")(,?)$/.exec(ln);
+    assert.ok(m, 'chunk line: ' + ln.slice(0, 80));
+    if (!m[2]) assert.match(all[i + 1], /^  \]\.join/, 'a chunk without a comma is the last of its page');
+    chunks[name].push(JSON.parse(m[1]));
+  });
+  assert.equal(name, null, 'every page is closed');
+  return { rhs, map, chunks };
 }
 function lastCode(env) {
   const m = env.mailbox[env.mailbox.length - 1];
@@ -225,7 +258,8 @@ describe('build (tools/build-bundle.js)', () => {
       ' + embedded pages ' + kib(b.parts.embedded) + ' (' + b.files.map((f) => f.name + ' ' + kib(f.bytes)).join(', ') + ')';
     const longest = Math.max(...fs.readFileSync(BUNDLE, 'utf8').split('\n').map((l) => l.length));
     t.diagnostic(line);
-    t.diagnostic('longest line: ' + longest.toLocaleString('en-US') + ' characters (each page is one JSON string)');
+    t.diagnostic('longest line: ' + longest.toLocaleString('en-US') + ' characters (pages are split into JSON string chunks of ≤ ' +
+      builder.MAX_LINE.toLocaleString('en-US') + ')');
   });
 });
 
@@ -245,11 +279,51 @@ describe('embedded pages', () => {
       assert.equal(B.app.call('include', n), bytes.toString('utf8'), 'include(' + n + ') serves the embedded copy');
     }
     assert.ok(!RAW_SPECIAL.test(rhs), 'no raw invisible / bidi / line-separator / CR characters inside the literals');
-    assert.ok(!/[^\S ]/.test(rhs.replace(/\n/g, '')), 'no raw whitespace other than spaces and the 5 line breaks');
-    assert.equal(rhs.split('\n').length, srcPages().length + 2, 'one line per page');
+    assert.ok(!/[^\S ]/.test(rhs.replace(/\n/g, '')), 'no raw whitespace other than spaces and the layout line breaks');
+    const { chunks } = embeddedJson(text);
+    for (const n of srcPages()) {
+      assert.ok(chunks[n].length > 1, n + ' is split into chunks');
+      chunks[n].slice(0, -1).forEach((c) => assert.ok(c.endsWith('\n'), n + ': chunks end at the page\'s own line breaks'));
+    }
     const admin = fs.readFileSync(path.join(SRC, 'Admin.html'), 'utf8');
     if (admin.includes('\ufeff')) {
       assert.ok(rhs.includes('\\ufeff') && map.Admin.includes('\ufeff'), 'the CSV byte-order mark in Admin.html is kept, escaped');
+    }
+  });
+
+  it('no line of dist/Code.gs is longer than 4,000 characters', () => {
+    const text = fs.readFileSync(BUNDLE, 'utf8');
+    assert.equal(builder.MAX_LINE, 4000);
+    const long = text.split('\n').map((l, i) => ({ i: i + 1, n: l.length })).filter((x) => x.n > builder.MAX_LINE);
+    assert.deepEqual(long, [], 'lines over 4,000 characters');
+  });
+
+  it('chunks never split a surrogate pair or an escape, even inside one very long line; deterministic', () => {
+    const emoji = '\ud83d\udccb', mix = 'نبض \u200f' + emoji + '\u2028"\\</script>\ufeff\u0001';
+    const longLine = Array.from({ length: 3000 }, (_, i) => (i % 7 === 0 ? emoji : i % 5 === 0 ? mix : 'س' + (i % 10))).join('') + '\n';
+    const text = 'أول سطر\n' + longLine + emoji.repeat(2100) + '\n' + 'x'.repeat(3994) + '\n' + mix.repeat(500) + 'آخر بلا سطر جديد';
+    const parts = builder.chunkText(text);
+    assert.equal(parts.join(''), text, 'joins back to the exact text');
+    assert.deepEqual(builder.chunkText(text), parts, 'deterministic');
+    for (const c of parts) {
+      const lit = builder.jsonLiteral(c);
+      assert.ok(lit.length + 5 <= builder.MAX_LINE, 'fits on one line: ' + lit.length);
+      assert.equal(JSON.parse(lit), c);
+      assert.doesNotMatch(c, /^[\udc00-\udfff]|[\ud800-\udbff]$/, 'no surrogate pair cut in two');
+    }
+    assert.ok(parts.length >= 8);
+    assert.deepEqual(builder.chunkText(''), [''], 'an empty page is one empty chunk');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nabd-chunks-'));
+    try {
+      for (const f of fs.readdirSync(SRC)) fs.copyFileSync(path.join(SRC, f), path.join(dir, f));
+      fs.writeFileSync(path.join(dir, 'Extra.html'), text);
+      const b = builder.bundle({ srcDir: dir });
+      assert.ok(b.code.split('\n').every((l) => l.length <= builder.MAX_LINE));
+      const { map } = embeddedJson(b.code);
+      assert.equal(map.Extra, text);
+      assert.equal(vm.runInNewContext(b.code + '\nNABD_EMBEDDED_FILES_.Extra', {}), text, 'what Apps Script evaluates');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -298,10 +372,11 @@ describe('dist/Code.gs alone behaves exactly like the multi-file project', () =>
     const t = twins();
     t.page({});
     // 1. setup through the one-time code emailed to the owner
-    assert.equal(t.call('api_requestCode').ok, true);
+    const otp = t.call('api_requestCode');
+    assert.equal(otp.ok, true);
     const code = t.both('code in the email', (s) => lastCode(s.env));
     assert.match(code, /^\d{6}$/);
-    const v = t.call('api_verifyCode', code, 'Bundle test');
+    const v = t.call('api_verifyCode', otp.cid, code, 'Bundle test');
     assert.equal(v.ok, true);
     const token = v.token;
     const setup = t.call('api_completeSetup', token, {

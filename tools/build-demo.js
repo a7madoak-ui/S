@@ -20,7 +20,7 @@
  * eval / new Function and works under a strict Content-Security-Policy.
  *
  * The page follows the claude.ai Artifact contract: no doctype/html/head/body tags (the host wraps the
- * file), <title> + viewport-fit meta first, scripts only from cdnjs (the app's QR library), styles only
+ * file), <title> + viewport-fit meta first, no external scripts (the app draws its QR codes inline), styles only
  * from Google Fonts, everything else inline. The demo shell is theme-aware; the app keeps its own light
  * design inside the frames.
  */
@@ -130,8 +130,8 @@ async function demoSeed(ctx) {
   await step(0.04, 'تجهيز ملف البيانات');
   at(hist[0], '06:20');
   app.doGet({});
-  call('api_requestCode');
-  var tok = call('api_verifyCode', lastCode(), ctx.uaFirst || 'Chrome — Windows').token;
+  var otp = call('api_requestCode');
+  var tok = call('api_verifyCode', otp.cid, lastCode(), ctx.uaFirst || 'Chrome — Windows').token;
   call('api_completeSetup', tok, {
     supervisor: { name: 'أ. أحمد المشرف', title: 'المشرف التربوي', office: 'مكتب التعليم (بيانات تجريبية)', phone: '0550000000' },
     systemTitle: '', schoolsText: '', preset: 'standard'
@@ -301,8 +301,8 @@ async function demoSeed(ctx) {
 
   /* ---- back to real time; this device signs in with a fresh one-time code */
   env.clock.real();
-  call('api_requestCode');
-  var session = call('api_verifyCode', lastCode(), ctx.uaNow || 'Chrome — Android').token;
+  otp = call('api_requestCode');
+  var session = call('api_verifyCode', otp.cid, lastCode(), ctx.uaNow || 'Chrome — Android').token;
   await step(1, 'جاهز');
   return {
     token: session,

@@ -1826,6 +1826,27 @@
         getFilesByName: function (name) {
           return iterator(Object.keys(S.drive.files).map(function (k) { return S.drive.files[k]; }).filter(function (x) { return x.parents.indexOf(id) >= 0 && !x.trashed && x.name === String(name) && ownerOk(x); }).map(function (x) { return fileObj(x.id); }), 'FileIterator');
         },
+        /** Drive API v2 query, the subset the app uses: clauses joined by "and" — trashed = true|false,
+         *  modifiedDate <op> 'RFC 3339' (no zone = UTC), title contains '…'. Anything else throws. */
+        searchFiles: function (query) {
+          requireScope('DriveApp.Folder.searchFiles', ['drive', 'drive.readonly']);
+          bump('Drive.Folder.searchFiles');
+          if (typeof query !== 'string') throw sigError('DriveApp.Folder.searchFiles', arguments);
+          var tests = String(query).trim().split(/\s+and\s+/i).map(function (clause) {
+            var m;
+            if ((m = /^trashed\s*=\s*(true|false)$/i.exec(clause))) { var tr = m[1].toLowerCase() === 'true'; return function (x) { return !!x.trashed === tr; }; }
+            if ((m = /^modifiedDate\s*(>=|<=|>|<|=)\s*'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)(Z|[+-]\d{2}:\d{2})?'$/.exec(clause))) {
+              var t = Date.parse(m[2] + (m[3] || 'Z')), op = m[1];
+              if (isNaN(t)) throw exc('Invalid argument: q');
+              return function (x) { var u = x.updated; return op === '>=' ? u >= t : op === '<=' ? u <= t : op === '>' ? u > t : op === '<' ? u < t : u === t; };
+            }
+            if ((m = /^title\s+contains\s+'((?:[^'\\]|\\.)*)'$/.exec(clause))) { var sub = m[1].replace(/\\(.)/g, '$1'); return function (x) { return x.name.indexOf(sub) >= 0; }; }
+            throw policy('Folder.searchFiles: query clause not supported by the mock: ' + clause);
+          });
+          return iterator(Object.keys(S.drive.files).map(function (k) { return S.drive.files[k]; }).filter(function (x) {
+            return x.parents.indexOf(id) >= 0 && ownerOk(x) && tests.every(function (f) { return f(x); });
+          }).map(function (x) { return fileObj(x.id); }), 'FileIterator');
+        },
         getFolders: function () { return iterator(Object.keys(S.drive.folders).map(function (k) { return S.drive.folders[k]; }).filter(function (x) { return x.parents.indexOf(id) >= 0 && !x.trashed && ownerOk(x); }).map(function (x) { return folderObj(x.id); }), 'FolderIterator'); },
         getParents: function () { return iterator([], 'FolderIterator'); },
         getDateCreated: function () { return newDate(fo().created); },

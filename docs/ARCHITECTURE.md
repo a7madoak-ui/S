@@ -203,6 +203,10 @@ If a data sheet was renamed by hand, it is found again by its saved sheet id (`c
 | `retiredKpis` | `{kpi: [old field ids]}`, so old reports keep their KPIs after a KPI question is deleted or re-created |
 | `sess:<sha256(token)>` | `{exp, created, last, ua}` (one per session, max 15) |
 | `digestSent` | date of the last digest (at most one per day) |
+| `counts` | `{d: date, n: {key: count}}` — today's durable counters, reset when the Riyadh date changes: `up:<schoolId>` uploads (max 40), `upb` uploaded bytes over all schools (max 300 MB), `sub:<schoolId>` submissions (max 30), `pin` wrong school codes over all schools (max 60). A cache entry lives 6 h at most, so it cannot hold a daily cap. |
+| `secret` | per-install key of the general-link credential (§9.1); a reset or a copied project gets a new one |
+| `photoSweep` | the last upload date the orphan sweep finished (§5.4) |
+| `photoKeep` | `{photoId: date}` photos of reports the supervisor deleted (never swept; entries kept 14 days) |
 
 Values larger than 8 KB are split into `key#1…key#n`, with `key = '@@chunks:n'` (`setBigProp_` / `getBigProp_`). The
 platform limits are 9 KB per value and 500 KB in total.
@@ -211,13 +215,13 @@ platform limits are 9 KB per value and 500 KB in total.
 
 | key | purpose | TTL |
 |---|---|---|
-| `otp` | `{h: sha256(code + ':' + ssId), exp, tries}` | 10 min |
+| `otp:<sha256(cid)>` | one emailed code: `{h: sha256(code + ':' + ssId), exp, tries}` — one record per request (challenge id `cid`) | 10 min |
 | `otp_last` | 60-second cooldown between codes | 60 s |
 | `otp_hour`, `otp_6h` | fixed-window counters (max 6 per hour, 10 per 6 h) | window |
-| `pin:<schoolId>` | wrong school-code attempts (max 5) | 15 min |
-| `sub:<schoolId>:<date>` | submissions per school per day (max 30) | 6 h |
-| `up:<schoolId>:<date>` | photo uploads per school per day (max 40) | 6 h |
-| `storage` | `{used, limit}` of the owner's Drive (dashboard warning at 85 %) | 6 h |
+| `login:<sha256(ticket)>` | one-time sign-in link from the spreadsheet menu (§9.1) | 10 min |
+| `pin:<schoolId>` | wrong school-code attempts for one school (max 5) | 15 min |
+| `pin:all` | wrong school-code attempts over all schools (max 20); the daily cap is `counts.pin` | 15 min |
+| `storage` | `{used, limit}` of the owner's Drive (dashboard warning at 85 %, uploads stop at 90 %) | 6 h |
 
 ### 5.4 Drive
 
@@ -229,6 +233,15 @@ platform limits are 9 KB per value and 500 KB in total.
   carry the school id, and it must not be trashed.
 * Removing a photo from a report trashes it only when no other saved report of that school references it.
   A server-side `TextFinder` on column M finds the candidate rows (`photoRefs_`).
+* **Unused uploads are swept** (`sweepOrphanPhotos_`): a file of the current photos folder that no saved report
+  uses is trashed 3 days after its upload date (an abandoned draft, or uploads made only to fill the owner's Drive).
+  It runs at most once a day — from `api_bootstrap` (4 s budget) and the digest trigger — and processes upload days
+  in order (`photoSweep`), finding each day's files with `Folder.searchFiles` on the modified time and the file
+  name. A photo is "used" when a report saved on or after that day references it; photos of reports the supervisor
+  deleted are kept (`photoKeep`). Trashed files can be restored from the Drive trash for 30 days.
+* **Storage caps.** Uploads are capped per school (40 a day) and over all schools (300 MB a day, `counts.upb`;
+  the supervisor's log notes the first refusal), and refused once the owner's storage is 90 % full, so a leaked
+  link can neither fill the Drive (shared with Gmail on free accounts) nor push it past the point where mail stops.
 
 ### 5.5 Browser storage (`localStorage`, prefix `nabd:`, always wrapped in try/catch)
 
@@ -236,9 +249,9 @@ platform limits are 9 KB per value and 500 KB in total.
 |---|---|---|
 | `session` | admin | session token |
 | `wizard` | admin | unfinished setup wizard (step + data) |
-| `otpSentAt` | admin | resend countdown |
+| `otpSentAt`, `otpCid` | admin | resend countdown; the challenge id the emailed code belongs to |
 | `waysCollapsed` | admin | Schools page explanation collapsed |
-| `school` | school (picker) | `{token, schoolName}` remembered after the code was entered once |
+| `school` | school (picker) | `{token, schoolName}` remembered after the code was entered once (the token is the general-link credential `g…`, never the private link); «خروج من هذا الجهاز» removes it |
 | `draft:<token>:<date>` | school | autosaved answers incl. uploaded photo ids |
 | `filledBy:<token>`, `last:<token>` | school | remembered filler name / last answers for suggestions |
 
@@ -347,8 +360,8 @@ Every `api_*` function validates its argument types, lengths and ranges, ignores
 
 | Function | Returns |
 |---|---|
-| `api_requestCode()` | `{ok, emailMasked}`: emails a 6-digit code to `cfg.ownerEmail` (checks cooldown, hourly and 6-hour limits, and the mail quota) |
-| `api_verifyCode(code, uaLabel)` | `{ok, token}`: 5 tries per code; creates a 30-day sliding session |
+| `api_requestCode()` | `{ok, cid, emailMasked}`: emails a 6-digit code to `cfg.ownerEmail` (checks cooldown, hourly and 6-hour limits, and the mail quota). Every request is its own challenge: the code is stored under `otp:<sha256(cid)>` and only the page holding `cid` can redeem it |
+| `api_verifyCode(cid, code, uaLabel)` | `{ok, token}`: 5 tries per challenge; creates a 30-day sliding session. The owner can also sign in without email through the spreadsheet menu: «🔗 رابط لوحة التحكم» issues a one-time `?login=<ticket>` link (10 minutes) that `doGet` trades for a session in `BOOT.session` |
 | `api_logout(token)` / `api_logoutAll(token)` | `{ok}` |
 | `api_completeSetup(token, {supervisor:{name,title,office,phone}, systemTitle, schoolsText, preset, webAppUrl?})` | `{ok, added}`: one time only. Saves settings and the preset form, and bulk-adds schools |
 

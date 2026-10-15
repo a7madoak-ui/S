@@ -617,7 +617,6 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
   BOOT.status = BOOT.status && typeof BOOT.status === 'object' ? BOOT.status : {};
   var APP_NAME = BOOT.appName || 'نبض المدارس';
   var DEFAULT_TITLE = 'متابعة سير العملية التعليمية';
-  var QR_URL = 'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js';
   var DEFAULT_MSG = ['السلام عليكم ورحمة الله وبركاته', 'سعادة مدير/ة {المدرسة} حفظكم الله', 'نأمل تعبئة تقرير المتابعة اليومي عبر الرابط:', '{الرابط}', 'شاكرين تعاونكم،', '{المشرف}'].join('\n');
   var DEFAULT_RET = ['السلام عليكم ورحمة الله', 'سعادة مدير/ة {المدرسة}', 'نأمل تصحيح تقرير يوم {التاريخ} حسب الملاحظة التالية:', '«{الملاحظة}»', 'رابط التصحيح: {الرابط}', '{المشرف}'].join('\n');
   var STAGES = ['ابتدائي', 'متوسط', 'ثانوي', 'رياض أطفال', 'مجمع', 'أخرى'];
@@ -1160,11 +1159,14 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       Otp.o = cfg;
       Otp.verifying = false;
       var sentAt = +A.store.get('otpSentAt', 0) || 0;
-      cfg.sent = sentAt > 0 && Date.now() - sentAt < 10 * 60 * 1000;
+      var cid = A.store.get('otpCid', '');   // the code belongs to this request (wrong guesses elsewhere cannot burn it)
+      cfg.cid = typeof cid === 'string' && /^[a-f0-9]{64}$/.test(cid) ? cid : '';
+      cfg.sent = !!cfg.cid && sentAt > 0 && Date.now() - sentAt < 10 * 60 * 1000;
       cfg.sentAt = cfg.sent ? sentAt : 0;
       Otp.render();
     },
     stop: function () { if (Otp.timer) clearInterval(Otp.timer); Otp.timer = null; },
+    forget: function () { A.store.del('otpSentAt'); A.store.del('otpCid'); },
     left: function () { var o = Otp.o; return o && o.sentAt ? Math.max(0, 60 - Math.floor((Date.now() - o.sentAt) / 1000)) : 0; },
     render: function () {
       var o = Otp.o, zone = o && byId(o.zone);
@@ -1203,10 +1205,12 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     send: function (btn) {
       var o = Otp.o;
       if (!o) return;
-      return A.busy(btn, call('api_requestCode')).then(function () {
+      return A.busy(btn, call('api_requestCode')).then(function (r) {
         o.sent = true;
         o.sentAt = Date.now();
+        o.cid = r.cid;
         A.store.set('otpSentAt', o.sentAt);
+        A.store.set('otpCid', r.cid);
         Otp.render();
         A.toast('أرسلنا الرمز إلى بريدك');
       }, function (e) {
@@ -1228,9 +1232,9 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       Otp.verifying = true;
       var btn = $('[data-action="otp-verify"]');
       inp.readOnly = true;
-      A.busy(btn, call('api_verifyCode', code, uaLabel())).then(function (r) {
+      A.busy(btn, call('api_verifyCode', o.cid, code, uaLabel())).then(function (r) {
         Otp.stop();
-        A.store.del('otpSentAt');
+        Otp.forget();
         S.token = r.token;
         A.store.set('session', r.token);
         o.onToken(r.token);
@@ -1280,7 +1284,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     save: function () { A.store.set('wizard', { step: Wizard.st.step, data: Wizard.st.data }); },
     authLost: function () {
       Wizard.st.step = 2;
-      A.store.del('otpSentAt');
+      Otp.forget();
       Wizard.render();
       A.toast('انتهت صلاحية التحقق — أرسل رمزًا جديدًا للمتابعة. بياناتك المكتوبة محفوظة.', 'info', 6000);
     },
@@ -2756,6 +2760,213 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
   };
 
   /* --- QR code */
+  /* <qr> QR codes for the share links, drawn here so no third-party script ever runs in this page (it holds the
+     supervisor session). A compact port of Kazuhiko Arase's MIT-licensed «QRCode for JavaScript» — the algorithm
+     of the qrcode-generator library used before: byte mode (UTF-8), error correction level M, versions 1–40.
+     QR.matrix(text) → rows of booleans (true = dark); QR.svg(text) → an <svg> made of numbers only. */
+  var QR = (function () {
+    var EXP = [], LOG = [], i;
+    for (i = 0; i < 256; i++) EXP[i] = i < 8 ? 1 << i : EXP[i - 4] ^ EXP[i - 5] ^ EXP[i - 6] ^ EXP[i - 8];
+    for (i = 0; i < 255; i++) LOG[EXP[i]] = i;
+    function gexp(n) { n %= 255; return EXP[n < 0 ? n + 255 : n]; }
+    // Error-correction blocks for level M, versions 1–40: [count, total codewords, data codewords] (× 1 or 2 groups).
+    var RS_M = [[1, 26, 16], [1, 44, 28], [1, 70, 44], [2, 50, 32], [2, 67, 43], [4, 43, 27], [4, 49, 31], [2, 60, 38, 2, 61, 39],
+      [3, 58, 36, 2, 59, 37], [4, 69, 43, 1, 70, 44], [1, 80, 50, 4, 81, 51], [6, 58, 36, 2, 59, 37], [8, 59, 37, 1, 60, 38],
+      [4, 64, 40, 5, 65, 41], [5, 65, 41, 5, 66, 42], [7, 73, 45, 3, 74, 46], [10, 74, 46, 1, 75, 47], [9, 69, 43, 4, 70, 44],
+      [3, 70, 44, 11, 71, 45], [3, 67, 41, 13, 68, 42], [17, 68, 42], [17, 74, 46], [4, 75, 47, 14, 76, 48], [6, 73, 45, 14, 74, 46],
+      [8, 75, 47, 13, 76, 48], [19, 74, 46, 4, 75, 47], [22, 73, 45, 3, 74, 46], [3, 73, 45, 23, 74, 46], [21, 73, 45, 7, 74, 46],
+      [19, 75, 47, 10, 76, 48], [2, 74, 46, 29, 75, 47], [10, 74, 46, 23, 75, 47], [14, 74, 46, 21, 75, 47], [14, 74, 46, 23, 75, 47],
+      [12, 75, 47, 26, 76, 48], [6, 75, 47, 34, 76, 48], [29, 74, 46, 14, 75, 47], [13, 74, 46, 32, 75, 47], [40, 75, 47, 7, 76, 48],
+      [18, 75, 47, 31, 76, 48]];
+    // Alignment-pattern centres per version (version 1 has none).
+    var ALIGN = [[], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34], [6, 22, 38], [6, 24, 42], [6, 26, 46], [6, 28, 50], [6, 30, 54],
+      [6, 32, 58], [6, 34, 62], [6, 26, 46, 66], [6, 26, 48, 70], [6, 26, 50, 74], [6, 30, 54, 78], [6, 30, 56, 82], [6, 30, 58, 86],
+      [6, 34, 62, 90], [6, 28, 50, 72, 94], [6, 26, 50, 74, 98], [6, 30, 54, 78, 102], [6, 28, 54, 80, 106], [6, 32, 58, 84, 110],
+      [6, 30, 58, 86, 114], [6, 34, 62, 90, 118], [6, 26, 50, 74, 98, 122], [6, 30, 54, 78, 102, 126], [6, 26, 52, 78, 104, 130],
+      [6, 30, 56, 82, 108, 134], [6, 34, 60, 86, 112, 138], [6, 30, 58, 86, 114, 142], [6, 34, 62, 90, 118, 146],
+      [6, 30, 54, 78, 102, 126, 150], [6, 24, 50, 76, 102, 128, 154], [6, 28, 54, 80, 106, 132, 158], [6, 32, 58, 84, 110, 136, 162],
+      [6, 26, 54, 82, 110, 138, 166], [6, 30, 58, 86, 114, 142, 170]];
+    var MASKS = [
+      function (r, c) { return (r + c) % 2 === 0; }, function (r) { return r % 2 === 0; },
+      function (r, c) { return c % 3 === 0; }, function (r, c) { return (r + c) % 3 === 0; },
+      function (r, c) { return (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0; },
+      function (r, c) { return (r * c) % 2 + (r * c) % 3 === 0; },
+      function (r, c) { return ((r * c) % 2 + (r * c) % 3) % 2 === 0; },
+      function (r, c) { return ((r * c) % 3 + (r + c) % 2) % 2 === 0; }];
+
+    function utf8(s) {
+      var out = [], k, c;
+      for (k = 0; k < s.length; k++) {
+        c = s.charCodeAt(k);
+        if (c >= 0xD800 && c <= 0xDBFF && k + 1 < s.length && (s.charCodeAt(k + 1) & 0xFC00) === 0xDC00) {
+          c = 0x10000 + ((c - 0xD800) << 10) + (s.charCodeAt(++k) - 0xDC00);
+        }
+        if (c < 0x80) out.push(c);
+        else if (c < 0x800) out.push(0xC0 | c >> 6, 0x80 | c & 63);
+        else if (c < 0x10000) out.push(0xE0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+        else out.push(0xF0 | c >> 18, 0x80 | c >> 12 & 63, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+      }
+      return out;
+    }
+    function blocks(v) {
+      var t = RS_M[v - 1], list = [], g, n;
+      for (g = 0; g < t.length; g += 3) for (n = 0; n < t[g]; n++) list.push({ total: t[g + 1], data: t[g + 2] });
+      return list;
+    }
+    function bch(value, poly, bits) {
+      var deg = 0, d;
+      for (d = poly; d; d >>>= 1) deg++;
+      d = value << (deg - 1);
+      for (var b = bits + deg - 2; b >= deg - 1; b--) if (d >>> b & 1) d ^= poly << (b - deg + 1);
+      return value << (deg - 1) | d;
+    }
+    /** Codewords: data (mode, length, bytes, terminator, padding) interleaved with Reed–Solomon error correction. */
+    function codewords(bytes, v) {
+      var bl = blocks(v), cap = 0, bits = [], k, j;
+      bl.forEach(function (b) { cap += b.data; });
+      var put = function (num, len) { for (var q = len - 1; q >= 0; q--) bits.push(num >>> q & 1); };
+      put(4, 4);
+      put(bytes.length, v < 10 ? 8 : 16);
+      bytes.forEach(function (b) { put(b, 8); });
+      if (bits.length + 4 <= cap * 8) put(0, 4);
+      while (bits.length % 8) bits.push(0);
+      var data = [];
+      for (k = 0; k < bits.length; k += 8) { var x = 0; for (j = 0; j < 8; j++) x = x << 1 | bits[k + j]; data.push(x); }
+      for (k = 0; data.length < cap; k++) data.push(k % 2 ? 0x11 : 0xEC);
+      var dc = [], ec = [], off = 0, maxD = 0, maxE = 0;
+      bl.forEach(function (b) {
+        var d = data.slice(off, off + b.data), n = b.total - b.data, gen = [1];
+        off += b.data;
+        for (k = 0; k < n; k++) {                    // generator polynomial ∏ (x − α^k)
+          var next = [];
+          for (j = 0; j <= gen.length; j++) {
+            var a = j < gen.length ? gen[j] : 0, p = j > 0 ? gen[j - 1] : 0;
+            next.push(a ^ (p ? gexp(LOG[p] + k) : 0));
+          }
+          gen = next;
+        }
+        var rem = d.concat(new Array(n).fill(0));     // remainder of d(x)·x^n ÷ gen(x)
+        for (k = 0; k < d.length; k++) {
+          var coef = rem[k];
+          if (coef) for (j = 1; j < gen.length; j++) rem[k + j] ^= gexp(LOG[gen[j]] + LOG[coef]);
+        }
+        dc.push(d); ec.push(rem.slice(d.length));
+        maxD = Math.max(maxD, d.length); maxE = Math.max(maxE, n);
+      });
+      var out = [];
+      for (k = 0; k < maxD; k++) dc.forEach(function (d) { if (k < d.length) out.push(d[k]); });
+      for (k = 0; k < maxE; k++) ec.forEach(function (e) { if (k < e.length) out.push(e[k]); });
+      return out;
+    }
+    function build(v, cw, mask, test) {
+      var n = v * 4 + 17, m = [], r, c, k;
+      for (r = 0; r < n; r++) { m.push([]); for (c = 0; c < n; c++) m[r].push(null); }
+      var finder = function (row, col) {
+        for (var a = -1; a <= 7; a++) for (var b = -1; b <= 7; b++) {
+          if (row + a < 0 || row + a >= n || col + b < 0 || col + b >= n) continue;
+          m[row + a][col + b] = (a >= 0 && a <= 6 && (b === 0 || b === 6)) || (b >= 0 && b <= 6 && (a === 0 || a === 6)) ||
+            (a >= 2 && a <= 4 && b >= 2 && b <= 4);
+        }
+      };
+      finder(0, 0); finder(n - 7, 0); finder(0, n - 7);
+      var pos = ALIGN[v - 1];
+      pos.forEach(function (row) {
+        pos.forEach(function (col) {
+          if (m[row][col] !== null) return;
+          for (var a = -2; a <= 2; a++) for (var b = -2; b <= 2; b++) m[row + a][col + b] = Math.abs(a) === 2 || Math.abs(b) === 2 || (a === 0 && b === 0);
+        });
+      });
+      for (k = 8; k < n - 8; k++) {
+        if (m[k][6] === null) m[k][6] = k % 2 === 0;
+        if (m[6][k] === null) m[6][k] = k % 2 === 0;
+      }
+      var fmt = bch(mask, 0x537, 5) ^ 0x5412;         // level M = 0b00, so the 5 data bits are the mask number
+      for (k = 0; k < 15; k++) {
+        var on = !test && (fmt >> k & 1) === 1;
+        if (k < 6) m[k][8] = on; else if (k < 8) m[k + 1][8] = on; else m[n - 15 + k][8] = on;
+        if (k < 8) m[8][n - k - 1] = on; else if (k < 9) m[8][15 - k] = on; else m[8][14 - k] = on;
+      }
+      m[n - 8][8] = !test;
+      if (v >= 7) {
+        var ver = bch(v, 0x1F25, 6);
+        for (k = 0; k < 18; k++) {
+          var bit = !test && (ver >> k & 1) === 1;
+          m[Math.floor(k / 3)][k % 3 + n - 11] = bit;
+          m[k % 3 + n - 11][Math.floor(k / 3)] = bit;
+        }
+      }
+      var inc = -1, idx = 0, bitI = 7, fn = MASKS[mask];
+      r = n - 1;
+      for (c = n - 1; c > 0; c -= 2) {
+        if (c === 6) c--;
+        for (;;) {
+          for (k = 0; k < 2; k++) {
+            if (m[r][c - k] !== null) continue;
+            var dark = idx < cw.length && (cw[idx] >>> bitI & 1) === 1;
+            m[r][c - k] = fn(r, c - k) ? !dark : dark;
+            if (--bitI < 0) { idx++; bitI = 7; }
+          }
+          r += inc;
+          if (r < 0 || r >= n) { r -= inc; inc = -inc; break; }
+        }
+      }
+      return m;
+    }
+    /** The penalty the original library minimises when it picks a mask (any mask scans; this keeps its output). */
+    function penalty(m) {
+      var n = m.length, p = 0, r, c, a, b, dark = 0;
+      for (r = 0; r < n; r++) for (c = 0; c < n; c++) {
+        var same = 0;
+        for (a = -1; a <= 1; a++) for (b = -1; b <= 1; b++) {
+          if ((a || b) && r + a >= 0 && r + a < n && c + b >= 0 && c + b < n && m[r + a][c + b] === m[r][c]) same++;
+        }
+        if (same > 5) p += 3 + same - 5;
+        if (m[r][c]) dark++;
+      }
+      for (r = 0; r < n - 1; r++) for (c = 0; c < n - 1; c++) {
+        var cnt = m[r][c] + m[r + 1][c] + m[r][c + 1] + m[r + 1][c + 1];
+        if (cnt === 0 || cnt === 4) p += 3;
+      }
+      var line = function (get) { return get(0) && !get(1) && get(2) && get(3) && get(4) && !get(5) && get(6); };
+      for (r = 0; r < n; r++) for (c = 0; c < n - 6; c++) {
+        if (line(function (k) { return m[r][c + k]; })) p += 40;
+        if (line(function (k) { return m[c + k][r]; })) p += 40;
+      }
+      return p + Math.abs(100 * dark / n / n - 50) / 5 * 10;
+    }
+    function matrix(text) {
+      var bytes = utf8(String(text)), v, best = 0, low = 0;
+      for (v = 1; v <= 40; v++) {
+        var cap = 0;
+        blocks(v).forEach(function (b) { cap += b.data; });
+        if (4 + (v < 10 ? 8 : 16) + bytes.length * 8 <= cap * 8) break;
+      }
+      if (v > 40) throw new Error('qr: text too long');
+      var cw = codewords(bytes, v);
+      for (var k = 0; k < 8; k++) {
+        var lost = penalty(build(v, cw, k, true));
+        if (k === 0 || lost < low) { low = lost; best = k; }
+      }
+      return build(v, cw, best, false);
+    }
+    /** An <svg> (dark runs as one path on a white quiet zone); it contains numbers only, never the encoded text. */
+    function svg(text, margin) {
+      var m = matrix(text), n = m.length, q = margin === undefined ? 2 : margin, size = n + 2 * q, d = [];
+      for (var r = 0; r < n; r++) {
+        for (var c = 0; c < n; c++) {
+          if (!m[r][c]) continue;
+          var from = c;
+          while (c + 1 < n && m[r][c + 1]) c++;
+          d.push('M' + (from + q) + ' ' + (r + q) + 'h' + (c - from + 1) + 'v1h-' + (c - from + 1) + 'z');
+        }
+      }
+      return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + size + ' ' + size + '" shape-rendering="crispEdges">' +
+        '<rect width="' + size + '" height="' + size + '" fill="#fff"/><path fill="#000" d="' + d.join('') + '"/></svg>';
+    }
+    return { matrix: matrix, svg: svg };
+  })();
+  /* </qr> */
+
   function openQr(title, url, sub) {
     var m = openModal({
       title: 'رمز QR', size: 'sm', className: 'ad-qr-modal',
@@ -2763,27 +2974,22 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
         <div class="doc__brand"><span class="brand">${brandMark()}<span class="brand__name">${APP_NAME}</span></span><span>${systemTitle()}</span></div>
         <h2 class="doc__title mt-3">${title}</h2>
         ${sub ? html`<p class="doc__sub">${sub}</p>` : ''}
-        <div class="ad-qrbox" id="qr-box"><div class="ad-chart-sk skeleton" style="height:220px"></div></div>
+        <div class="ad-qrbox" id="qr-box"></div>
         <p class="text-sm">امسح الرمز بكاميرا الجوال لفتح نموذج المتابعة اليومية.</p>
         <p class="ad-qrdoc__url">${url}</p>
       </article>`,
       foot: html`<button type="button" class="btn btn-primary" data-action="doc-print">${icon('print')}<span>طباعة</span></button><button type="button" class="btn btn-secondary" data-action="copy-url" data-url="${url}">${icon('copy')}<span>نسخ الرابط</span></button><button type="button" class="btn btn-ghost" data-modal-close>إغلاق</button>`
     });
-    A.loadScript(QR_URL).then(function () {
-      var box = $('#qr-box', m.el);
-      if (!box || typeof window.qrcode !== 'function') throw new Error('qr');
-      var qr = window.qrcode(0, 'M');
-      qr.addData(url);
-      qr.make();
-      var svg = String(qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true }));
-      if (!/^\s*<svg[\s>]/i.test(svg) || /<script|on\w+\s*=/i.test(svg)) throw new Error('qr');
-      box.innerHTML = svg;
+    var box = $('#qr-box', m.el);
+    if (!box) return;
+    try {
+      box.innerHTML = QR.svg(url);   // built here from numbers only (no third-party script, works offline)
       var el = box.querySelector('svg');
-      if (el) { el.setAttribute('role', 'img'); el.setAttribute('aria-label', 'رمز QR لرابط ' + title); }
-    }).catch(function () {
-      var box = $('#qr-box', m.el);
-      if (box) setHtml(box, html`<div class="alert alert--warn">${icon('wifi-off')}<div>تعذّر إنشاء رمز QR — تحقّق من الاتصال بالإنترنت</div></div>`);
-    });
+      el.setAttribute('role', 'img');
+      el.setAttribute('aria-label', 'رمز QR لرابط ' + title);
+    } catch (e) {
+      setHtml(box, html`<div class="alert alert--warn">${icon('alert')}<div>تعذّر إنشاء رمز QR لهذا الرابط. استخدم «نسخ الرابط» بدلًا منه.</div></div>`);
+    }
   }
 
   /* --- per-school actions */
@@ -2841,7 +3047,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     repin: function (id, btn) {
       var s = schoolById(id);
       if (!s) return;
-      return A.confirm({ title: 'تغيير رمز «' + s.name + '»؟', text: 'الرمز القديم لن يعمل مع الرابط العام بعد الآن. الرابط الخاص بالمدرسة لا يتأثر.', okText: 'إنشاء رمز جديد' }).then(function (ok) {
+      return A.confirm({ title: 'تغيير رمز «' + s.name + '»؟', text: 'الرمز القديم لن يعمل مع الرابط العام بعد الآن، وتخرج الأجهزة التي دخلت به فتطلب الرمز الجديد. الرابط الخاص بالمدرسة لا يتأثر.', okText: 'إنشاء رمز جديد' }).then(function (ok) {
         if (!ok) return;
         return A.busy(btn, auth('api_regeneratePin', id)).then(function (r) {
           S.revealed[id] = true;
@@ -4085,6 +4291,11 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
   function start() {
     var tok = A.store.get('session', null);
     if (tok && typeof tok === 'object' && typeof tok.token === 'string') tok = tok.token;
+    if (typeof BOOT.session === 'string' && /^[a-f0-9]{64}$/.test(BOOT.session)) {   // opened from the spreadsheet menu
+      tok = BOOT.session;
+      A.store.set('session', tok);
+      Otp.forget();
+    }
     S.token = typeof tok === 'string' && tok.length >= 16 && tok.length <= 256 ? tok : null;
     if (!S.token && tok) A.store.del('session');
     if (!BOOT.status.setupDone) Wizard.start();

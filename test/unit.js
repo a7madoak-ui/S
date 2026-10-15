@@ -17,6 +17,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const GasMock = require('./gas-mock.js');
 const { loadApp, extractBoot } = require('./runtime.js');
 
@@ -52,7 +53,7 @@ function sys(o = {}) {
     newSheetRows: o.newSheetRows,
     seed: o.seed
   });
-  const app = loadApp({ srcDir: SRC, env });
+  const app = loadApp({ srcDir: SRC, env, code: o.code });   // o.code: a modified Code.gs (e.g. a smaller limit)
   env.setFiles((name) => {
     const n = String(name).replace(/\.html$/, '');
     if (!/^[A-Za-z0-9_-]+$/.test(n)) return null;
@@ -72,7 +73,7 @@ function sys(o = {}) {
       lastOtpAt = env.clock.now();
       assert.equal(r.ok, true, 'api_requestCode ok');
       const code = lastCode(env);
-      const v = t.call('api_verifyCode', code, ua || 'Node test');
+      const v = t.call('api_verifyCode', r.cid, code, ua || 'Node test');
       assert.equal(v.ok, true);
       return v.token;
     },
@@ -250,7 +251,7 @@ describe('platform contract', () => {
     const t = sys();
     assert.equal(t.app.evaluate('APP_NAME'), 'نبض المدارس');
     assert.equal(t.app.evaluate('DEFAULT_SYSTEM_TITLE'), 'متابعة سير العملية التعليمية');
-    assert.equal(t.app.evaluate('APP_VERSION'), '1.2.0');
+    assert.equal(t.app.evaluate('APP_VERSION'), '1.2.1');
     assert.equal(t.app.evaluate('TZ'), 'Asia/Riyadh');
   });
   it('does not use services outside the declared scopes', () => {
@@ -288,7 +289,7 @@ describe('doGet routing', () => {
     const boot = extractBoot(out.html);
     assert.equal(boot.page, 'admin');
     assert.equal(boot.appName, 'نبض المدارس');
-    assert.equal(boot.version, '1.2.0');
+    assert.equal(boot.version, '1.2.1');
     assert.equal(boot.status.setupDone, false);
     assert.equal(boot.status.ownerEmailMasked, 'su••••••@gmail.com');
     assert.equal(boot.status.deployed, true);
@@ -358,7 +359,9 @@ describe('OTP login', () => {
   it('sends a 6-digit code to the owner in an RTL email; stores only a hash', () => {
     const t = sys();
     const r = t.call('api_requestCode');
-    assert.deepEqual(r, { ok: true, emailMasked: 'su••••••@gmail.com' });
+    assert.match(r.cid, /^[0-9a-f]{64}$/, 'the challenge id the code belongs to');
+    assert.deepEqual(r, { ok: true, cid: r.cid, emailMasked: 'su••••••@gmail.com' });
+    assert.ok(!JSON.stringify(t.env.cacheEntries()).includes(r.cid), 'only a hash of the challenge id is stored');
     const m = t.env.mailbox[0];
     const code = lastCode(t.env);
     assert.equal(m.to, OWNER);
@@ -381,30 +384,79 @@ describe('OTP login', () => {
   });
   it('rejects wrong codes and deletes the code after 5 wrong tries', () => {
     const t = sys();
-    t.call('api_requestCode');
+    const { cid } = t.call('api_requestCode');
     const code = lastCode(t.env);
     const wrong = code === '000000' ? '111111' : '000000';
     const msgs = [];
-    for (let i = 0; i < 5; i++) msgs.push(expectError(() => t.call('api_verifyCode', wrong, 'ua')).message || '');
-    const after = expectError(() => t.call('api_verifyCode', code, 'ua'), null, 'correct code after 5 wrong tries must not work');
+    for (let i = 0; i < 5; i++) msgs.push(expectError(() => t.call('api_verifyCode', cid, wrong, 'ua')).message || '');
+    const after = expectError(() => t.call('api_verifyCode', cid, code, 'ua'), null, 'correct code after 5 wrong tries must not work');
     assert.ok(msgs.concat(after.message || after.error).some((m) => /تجاوزت عدد المحاولات، اطلب رمزًا جديدًا/.test(m)), msgs.join(' | '));
   });
   it('expires the code after 10 minutes and accepts it once only', () => {
     const t = sys();
-    t.call('api_requestCode');
+    let { cid } = t.call('api_requestCode');
     let code = lastCode(t.env);
     t.clock.advance(10 * 60000 + 1000);
-    expectError(() => t.call('api_verifyCode', code, 'ua'), /انتهت صلاحية الرمز|اطلب رمزًا جديدًا/);
-    t.call('api_requestCode');
+    expectError(() => t.call('api_verifyCode', cid, code, 'ua'), /انتهت صلاحية الرمز|اطلب رمزًا جديدًا/);
+    cid = t.call('api_requestCode').cid;
     code = lastCode(t.env);
-    const v = t.call('api_verifyCode', code, 'ua');
+    const v = t.call('api_verifyCode', cid, code, 'ua');
     assert.match(v.token, /^[0-9a-f]{64}$/);
-    expectError(() => t.call('api_verifyCode', code, 'ua'), null, 'OTP reuse');
+    expectError(() => t.call('api_verifyCode', cid, code, 'ua'), null, 'OTP reuse');
   });
-  it('rejects malformed codes without crashing', () => {
+  it('rejects malformed codes and challenge ids without crashing', () => {
     const t = sys();
-    t.call('api_requestCode');
-    for (const bad of ['', 'abcdef', '12345', '1234567', null, { x: 1 }]) expectError(() => t.call('api_verifyCode', bad, 'ua'), null, JSON.stringify(bad));
+    const { cid } = t.call('api_requestCode');
+    for (const bad of ['', 'abcdef', '12345', '1234567', null, { x: 1 }]) expectError(() => t.call('api_verifyCode', cid, bad, 'ua'), null, JSON.stringify(bad));
+    const code = lastCode(t.env);
+    for (const bad of ['', null, 'x'.repeat(64), cid.toUpperCase(), cid.slice(1), { cid }]) {
+      expectError(() => t.call('api_verifyCode', bad, code, 'ua'), /انتهت صلاحية الرمز/, 'cid ' + JSON.stringify(bad));
+    }
+    assert.equal(t.call('api_verifyCode', cid, code, 'ua').ok, true, 'malformed ids never touched the real challenge');
+  });
+  it('[security] wrong codes sent by another visitor never burn the code the owner was just sent', () => {
+    const t = sys();
+    const owner = t.call('api_requestCode');
+    const code = lastCode(t.env);
+    t.clock.advance(61000);
+    const other = t.call('api_requestCode');   // an anonymous visitor's own challenge
+    const wrong = code === '000000' ? '111111' : '000000';
+    for (let i = 0; i < 5; i++) expectError(() => t.call('api_verifyCode', other.cid, wrong, 'x'));
+    for (let i = 0; i < 20; i++) expectError(() => t.call('api_verifyCode', GasMock.sha256Hex('guess' + i), wrong, 'x'), /انتهت صلاحية الرمز/);
+    const v = t.call('api_verifyCode', owner.cid, code, 'Owner phone');
+    assert.match(v.token, /^[0-9a-f]{64}$/, 'the owner signs in with the code from the email');
+    expectError(() => t.call('api_verifyCode', other.cid, code, 'x'), null, "a code works only with the challenge it was sent for");
+  });
+  it('[security] visitors who use up the code limits cannot lock the owner out: the menu link signs in without email', () => {
+    const t = sys();
+    const { token } = t.ready();
+    t.boot({});   // the dashboard was opened once from the deployment (saves its /exec URL)
+    for (let i = 0; i < 12; i++) { t.clock.advance(61000); try { t.call('api_requestCode'); } catch (e) { /* capped */ } }
+    const capped = expectError(() => t.call('api_requestCode'), /رموز كثيرة/);
+    assert.match(capped.message, /📋 نبض المدارس.*رابط لوحة التحكم.*فتح لوحة التحكم/, 'the message names the way in that cannot be blocked');
+    const mails = t.env.mailbox.length;
+    // google.script.run cannot reach the menu: it fails before any sign-in link exists
+    assert.throws(() => t.call('menuShowLink'), /getUi/);
+    assert.equal(t.env.ui.dialogs.length, 0);
+    t.app.runMenu('menuShowLink');
+    const dlg = t.env.ui.dialogs[0].html;
+    const m = /href="([^"]*\?login=([0-9a-f]{64}))"/.exec(dlg);
+    assert.ok(m, 'the dialog button opens a one-time sign-in link');
+    assert.ok(m[1].startsWith(BASE_URL + '?login='), m[1]);
+    assert.ok(dlg.includes('value="' + BASE_URL + '"'), 'the link to copy / bookmark carries no ticket');
+    assert.ok(!JSON.stringify(t.env.cacheEntries()).includes(m[2]), 'only a hash of the ticket is stored');
+    const boot = t.boot({ login: m[2] });
+    assert.match(boot.session, /^[0-9a-f]{64}$/, 'BOOT carries a new session');
+    assert.equal(t.call('api_bootstrap', boot.session).ok, true, 'a working supervisor session');
+    assert.notEqual(boot.session, token);
+    assert.equal(t.env.mailbox.length, mails, 'no email was needed');
+    assert.equal(t.boot({ login: m[2] }).session, undefined, 'the link works once');
+    assert.equal(t.boot({ login: GasMock.sha256Hex('forged') }).session, undefined, 'a forged ticket gives nothing');
+    t.app.runMenu('menuShowLink');
+    const late = /\?login=([0-9a-f]{64})"/.exec(t.env.ui.dialogs[1].html)[1];
+    t.clock.advance(11 * 60000);
+    assert.equal(t.boot({ login: late }).session, undefined, 'tickets expire after 10 minutes');
+    assert.ok(t.sheet(SH.log).values.some((r) => r.join(' ').includes('رابط الدخول من ملف Google Sheets')), 'the sign-in is logged');
   });
   it('stores sessions hashed (sess:<sha256(token)>) with a 30-day expiry and logs the login', () => {
     const t = sys();
@@ -451,7 +503,7 @@ describe('setup wizard (api_completeSetup)', () => {
     assert.equal(b.systemTitle, 'متابعة سير العملية التعليمية');
     assert.equal(b.schoolsCount, 2);
     assert.equal(b.ownerEmail, OWNER);
-    assert.equal(b.version, '1.2.0');
+    assert.equal(b.version, '1.2.1');
     assert.equal(b.today, '2026-10-14');
     assert.equal(b.now, '07:30');
     assert.equal(b.baseUrl, BASE_URL);
@@ -587,7 +639,7 @@ describe('schools CRUD, links and pins', () => {
     assert.equal(pin[0], '0', 'could not get a pin starting with 0');
     const listed = t.call('api_schools', token).schools.find((x) => x.id === schools[0].id);
     assert.equal(listed.pin, pin);
-    assert.equal(t.call('api_resolveSchool', schools[0].id, pin).token, schools[0].token);
+    assert.equal(t.form(t.call('api_resolveSchool', schools[0].id, pin).token).school.name, schools[0].name);
   });
   it('validates names (2–120, unique ignoring case/spaces), phone, counts and stage', () => {
     const t = sys();
@@ -703,13 +755,82 @@ describe('general link (school picker + pin)', () => {
     const t = sys();
     const { schools } = t.ready();
     const [a, b] = schools;
-    assert.deepEqual(t.call('api_resolveSchool', a.id, a.pin), { ok: true, token: a.token });
+    const r = t.call('api_resolveSchool', a.id, a.pin);
+    assert.equal(r.ok, true);
+    assert.equal(t.form(r.token).school.name, a.name, 'the credential opens that school');
     const wrong = a.pin === '0000' ? '1111' : '0000';
     for (let i = 0; i < 5; i++) expectError(() => t.call('api_resolveSchool', a.id, wrong), /رمز المدرسة غير صحيح|محاولات كثيرة/);
     expectError(() => t.call('api_resolveSchool', a.id, a.pin), /محاولات كثيرة، حاول بعد ربع ساعة/, 'locked even with the right pin');
-    assert.equal(t.call('api_resolveSchool', b.id, b.pin).token, b.token, 'other schools are not locked');
+    assert.equal(t.form(t.call('api_resolveSchool', b.id, b.pin).token).school.name, b.name, 'other schools are not locked');
     t.clock.advance(16 * 60000);
-    assert.equal(t.call('api_resolveSchool', a.id, a.pin).token, a.token);
+    assert.equal(t.call('api_resolveSchool', a.id, a.pin).token, r.token, 'same school + same code → same credential');
+  });
+  it('[security] wrong codes are capped over ALL schools per 15 minutes and per day; the supervisor log shows it', () => {
+    const t = sys({ clock: '2026-10-14T00:05' });
+    const token = t.setup();
+    const names = Array.from({ length: 40 }, (_, i) => 'مدرسة الاختبار رقم ' + (i + 1));
+    assert.equal(t.call('api_bulkAddSchools', token, names.join('\n')).added, 40);
+    const schools = t.call('api_schools', token).schools;
+    const picker = t.boot({ f: 'all' }).picker.schools;   // what an anonymous visitor sees
+    assert.equal(picker.length, 40);
+    const pinOf = {};
+    schools.forEach((s) => { pinOf[s.id] = s.pin; });
+    // The reported attack: 4 guesses per school per window (never trips the per-school lock), every 15 minutes.
+    // Before the fix every window checked 4 × 40 = 160 codes; the attacker stops a window at the first refusal.
+    const checked = [];
+    for (let w = 0; w < 6; w++) {
+      let n = 0, paused = false;
+      for (const s of picker) {
+        for (let g = 0; g < 4 && !paused; g++) {
+          let guess = String(1000 + w * 4 + g);
+          if (guess === pinOf[s.id]) guess = String(9000 + g);
+          try { t.call('api_resolveSchool', s.id, guess); assert.fail('a wrong code was accepted'); } catch (e) {
+            if (/غير صحيح/.test(e.message)) n++;
+            else if (/متوقف مؤقتًا/.test(e.message)) paused = true;
+            else throw e;
+          }
+        }
+        if (paused) break;
+      }
+      checked.push(n);
+      t.clock.advance(15 * 60000);
+    }
+    assert.deepEqual(checked, [20, 20, 20, 0, 0, 0], 'codes checked per 15-minute window: 20, and 60 per day over all schools');
+    const real = schools[7];
+    t.at('2026-10-14T23:50');
+    expectError(() => t.call('api_resolveSchool', real.id, real.pin), /متوقف مؤقتًا/, 'paused even with the right code (no oracle while paused)');
+    assert.equal(t.form(real.token).ok, true, 'private links keep working');
+    const log = t.sheet(SH.log).values.map((r) => r.join(' '));
+    assert.ok(log.some((l) => l.includes('رمز مدرسة غير صحيح')), 'the first wrong code is logged');
+    assert.ok(log.some((l) => l.includes('إيقاف مؤقت للدخول برمز المدرسة')), 'the pause is logged');
+    assert.ok(log.filter((l) => l.includes('رمز مدرسة غير صحيح')).length <= 4, 'one line per window, not per guess');
+    t.at('2026-10-15T07:00');
+    assert.equal(t.form(t.call('api_resolveSchool', real.id, real.pin).token).school.name, real.name, 'the next day works again');
+  });
+  it('[security] the general link never hands out the private link; a new code signs out devices that used the old one', () => {
+    const t = sys();
+    const { token, schools } = t.ready();
+    const [a, b] = schools;
+    const cred = t.call('api_resolveSchool', a.id, a.pin).token;
+    assert.match(cred, /^g[0-9a-f]{32}$/);
+    assert.ok(!cred.includes(a.token) && cred !== a.token, 'the private token is not revealed');
+    assert.equal(t.boot({ s: cred }).form.school.name, a.name, '?s=<credential> opens the form');
+    assert.equal(t.submit(cred).ok, true, 'and the device can submit');
+    // the supervisor suspects the code leaked → «إنشاء رمز جديد»
+    const fresh = t.call('api_regeneratePin', token, a.id).school;
+    assert.equal(t.form(cred).code, 'BAD_LINK', 'the device that used the old code is signed out');
+    expectError(() => t.submit(cred), /الرابط غير صحيح/);
+    expectError(() => t.upload(cred), /الرابط غير صحيح/);
+    assert.equal(t.form(a.token).ok, true, 'the private link is not affected');
+    const cred2 = t.call('api_resolveSchool', a.id, fresh.pin).token;
+    assert.notEqual(cred2, cred);
+    assert.equal(t.form(cred2).school.name, a.name, 'the new code works');
+    t.call('api_regenerateLink', token, a.id);
+    assert.equal(t.form(cred2).code, 'BAD_LINK', 'a new private link also signs general-link devices out');
+    const credB = t.call('api_resolveSchool', b.id, b.pin).token;
+    t.call('api_setSchoolActive', token, b.id, false);
+    assert.equal(t.form(credB).code, 'INACTIVE');
+    assert.equal(t.form('g' + '0'.repeat(32)).code, 'BAD_LINK', 'a made-up credential opens nothing');
   });
   it('rejects unknown/inactive schools and malformed input', () => {
     const t = sys();
@@ -964,6 +1085,81 @@ describe('evidence photos', () => {
     assert.equal(t.upload(schools[1]).ok, true, 'other schools unaffected');
     t.at('2026-10-15T07:00');
     assert.equal(t.upload(schools[0]).ok, true, 'resets the next day');
+  });
+  it('[security] the daily upload and submit caps hold all day (not per 6-hour cache entry) and survive cache eviction', () => {
+    const t = sys({ clock: '2026-10-14T00:05' });
+    const { schools } = t.ready();
+    const a = schools[0];
+    for (let i = 0; i < 40; i++) assert.equal(t.upload(a).ok, true);
+    for (const at of ['2026-10-14T06:10', '2026-10-14T12:15', '2026-10-14T18:20', '2026-10-14T23:59']) {
+      t.at(at);
+      t.env.evictCache();
+      expectError(() => t.upload(a), /الحد اليومي لرفع الصور/, 'still capped at ' + at);
+    }
+    assert.equal(t.env.drive.files.length, 40, 'one school: 40 photos per day, not 160');
+    t.at('2026-10-14T08:00');
+    for (let i = 0; i < 30; i++) assert.equal(t.submit(schools[1]).ok, true);
+    t.at('2026-10-14T08:59');
+    t.env.evictCache();
+    expectError(() => t.submit(schools[1]), /الحد اليومي لمرات الإرسال/);
+    t.at('2026-10-15T00:01');
+    assert.equal(t.upload(a).ok, true, 'a new day starts a new count');
+  });
+  it('[security] a daily byte budget over all schools caps Drive growth; uploads stop when Drive is 90 % full', () => {
+    const real = sys();
+    assert.equal(real.app.evaluate('LIMITS_.uploadBytesPerDay'), 300 * 1024 * 1024, 'the real budget is 300 MB a day');
+    const code = fs.readFileSync(path.join(SRC, 'Code.gs'), 'utf8').replace('uploadBytesPerDay: 300 * 1024 * 1024,', 'uploadBytesPerDay: 500,');
+    assert.notEqual(code, fs.readFileSync(path.join(SRC, 'Code.gs'), 'utf8'));
+    const t = sys({ code });
+    const { schools } = t.ready();
+    const png = Buffer.from(PNG_B64, 'base64').length;   // 70 bytes
+    let ok = 0;
+    for (let i = 0; i < 20; i++) {
+      const s = schools[i % 3];
+      try { t.upload(s); ok++; } catch (e) { assert.match(e.message, /بلغت الحد اليومي للنظام/); }
+    }
+    assert.equal(ok, Math.floor(500 / png), 'stops at the budget, whichever schools upload');
+    assert.equal(t.sheet(SH.log).values.filter((r) => r.join(' ').includes('إيقاف رفع الصور لبقية اليوم')).length, 1, 'logged once');
+    t.at('2026-10-15T07:00');
+    assert.equal(t.upload(schools[0]).ok, true, 'the budget is per day');
+    // the storage guard (real limits): no new file once the owner's storage is 90 % used
+    const { schools: s2 } = real.ready();
+    real.env.storageUsed = Math.ceil(0.9 * 15 * 1024 * 1024 * 1024);
+    real.env.evictCache();
+    const before = real.env.drive.files.length;
+    expectError(() => real.upload(s2[0]), /ممتلئة/);
+    assert.equal(real.env.drive.files.length, before, 'nothing was written');
+  });
+  it('[security] uploads that no report uses are trashed after 3 days; used, kept and recent photos stay', () => {
+    const t = sys({ clock: '2026-10-11T07:00' });   // Sunday
+    const { token, schools } = t.ready();
+    const [a, b, c] = schools;
+    const used = t.upload(a).photo, orphan = t.upload(a).photo;
+    t.submit(a, { photos: [used] });
+    const kept = t.upload(b).photo;
+    t.submit(b, { photos: [kept] });
+    t.call('api_deleteReport', token, '2026-10-11', b.id);   // deleting a report never deletes its photos
+    const later = t.upload(c).photo;                          // uploaded today, sent with tomorrow's report
+    const outside = t.env.drive.DriveApp.createFile('2026-10-11_' + a.id + '_abcdef.png', 'x', 'image/png');
+    t.at('2026-10-12T07:10');
+    t.submit(c, { photos: [later] });
+    const recent = t.upload(a).photo;                         // Monday's unused upload
+    t.at('2026-10-13T08:00');
+    t.call('api_bootstrap', token);
+    assert.equal(t.env.drive.file(orphan.id).trashed, false, 'not before 3 days');
+    t.at('2026-10-14T08:00');
+    t.call('api_bootstrap', token);
+    const trashed = (p) => t.env.drive.file(p.id).trashed;
+    assert.equal(trashed(orphan), true, 'the unused upload is trashed');
+    assert.deepEqual([used, kept, later, recent].map(trashed), [false, false, false, false], 'used / kept / too recent stay');
+    assert.equal(t.env.drive.file(outside.getId()).trashed, false, 'files outside the app folder are never touched');
+    t.call('api_bootstrap', token);
+    assert.equal(t.app.lastCall.ops['Drive.Folder.searchFiles'] || 0, 0, 'once a day');
+    t.at('2026-10-15T08:00');
+    t.call('api_bootstrap', token);
+    assert.equal(trashed(recent), true, "Monday's unused upload goes three days later");
+    assert.equal(t.call('api_report', token, '2026-10-11', a.id).ok, true);
+    assert.equal(t.call('api_photo', token, used.id).ok, true, 'evidence still opens');
   });
   it('photo answers must belong to this school, exist, not be trashed, and respect maxCount', () => {
     const t = sys();
@@ -2413,5 +2609,42 @@ describe('phone numbers are stored as digits only', () => {
     assert.equal(t.call('api_schools', token).schools.find((x) => x.name === 'مدرسة الواحة').phone, '966500000001');
     t.call('api_saveSettings', token, { supervisor: { phone: '+966 50 999 0000' } });
     assert.equal(t.call('api_getSettings', token).supervisor.phone, '966509990000');
+  });
+});
+
+describe('[security] pages load no third-party script; QR codes are drawn inline', () => {
+  const pages = ['Admin', 'School', 'Common', 'Styles'].map((n) => fs.readFileSync(path.join(SRC, n + '.html'), 'utf8'));
+  it('no page loads a script from another origin (the supervisor session lives in this origin)', () => {
+    for (const html of pages) {
+      assert.doesNotMatch(html, /<script[^>]+\bsrc\s*=/i, 'no <script src>');
+      assert.doesNotMatch(html, /createElement\(\s*['"]script['"]\s*\)/, 'no injected <script>');
+      assert.doesNotMatch(html, /https?:\/\/(?:cdnjs\.|cdn\.jsdelivr\.|unpkg\.)/i, 'no CDN script');
+    }
+  });
+  it('the inline QR encoder (Admin.html) produces codes an independent reader decodes, for every size the links need', () => {
+    const { qrDecode, svgToMatrix } = require('./qr-decode.js');
+    const admin = pages[0];
+    const at = admin.indexOf('/* <qr>'), end = admin.indexOf('/* </qr> */');
+    assert.ok(at > 0 && end > at, 'the QR block is marked');
+    const ctx = vm.createContext({});
+    vm.runInContext(admin.slice(at, end) + '\nthis.QR = QR;', ctx);
+    const QR = ctx.QR;
+    const links = [BASE_URL + '?f=all', BASE_URL + '?s=Abcdefghij0123456789',
+      'https://script.google.com/a/macros/schools.example.edu.sa/s/AKfycbz' + 'x'.repeat(60) + '/exec?s=g' + 'f'.repeat(32), 'نبض المدارس ✓ 📋'];
+    for (let n = 1; n <= 2331; n += n < 160 ? 1 : 37) links.push(Array.from({ length: n }, (_, i) => String.fromCharCode(33 + ((i * 31 + n) % 94))).join(''));
+    const versions = new Set();
+    for (const text of links) {
+      const svg = QR.svg(text);
+      assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 \d+ \d+" shape-rendering="crispEdges"><rect [^<>]*\/><path fill="#000" d="[Mhvz0-9 -]*"\/><\/svg>$/,
+        'numbers only — the encoded text never reaches the markup');
+      const d = qrDecode(svgToMatrix(svg));
+      assert.equal(d.text, text);
+      versions.add(d.version);
+    }
+    assert.equal(versions.size, 40, 'versions 1–40');
+    const m = QR.matrix(BASE_URL + '?f=all');
+    m[m.length - 1][m.length - 3] = !m[m.length - 1][m.length - 3];
+    assert.throws(() => qrDecode(m), /syndrome/, 'sanity: the reader rejects a damaged code');
+    assert.throws(() => QR.matrix('x'.repeat(2332)), /too long/);
   });
 });

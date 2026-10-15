@@ -23,6 +23,7 @@ const path = require('node:path');
 const zlib = require('node:zlib');
 const { chromium } = require('playwright-core');
 const { startServer } = require('./server.js');
+const { qrDecode, svgToMatrix } = require('./qr-decode.js');
 
 const SRC = path.resolve(process.env.NABD_SRC || path.join(__dirname, '..', 'src'));
 const SHOTS_DIR = path.join(__dirname, '..', 'docs', 'screenshots');
@@ -269,8 +270,8 @@ const SCHOOLS = [
 const seed = {
   async login() {
     await api('__clock', { advanceMs: 61000 });
-    await rpc('api_requestCode');
-    return (await rpc('api_verifyCode', await lastCode(), 'e2e')).token;
+    const { cid } = await rpc('api_requestCode');
+    return (await rpc('api_verifyCode', cid, await lastCode(), 'e2e')).token;
   },
   async setup(o = {}) {
     const token = await seed.login();
@@ -334,7 +335,6 @@ async function open(kind, o = {}) {
     const url = route.request().url();
     if (/fonts\.googleapis\.com/.test(url)) return route.fulfill({ status: 200, contentType: 'text/css', body: '/* fonts stubbed in tests */' });
     if (/fonts\.gstatic\.com/.test(url)) return route.fulfill({ status: 200, contentType: 'font/woff2', body: '' });
-    if (/qrcode/.test(url)) return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.qrcode=function(){return{addData:function(){},make:function(){},createSvgTag:function(){return \'<svg data-stub="qr" viewBox="0 0 10 10"></svg>\';}}};' });
     external.push(url);
     return route.abort('blockedbyclient');
   });
@@ -498,7 +498,12 @@ describe('e2e', () => {
     await shot(page, 'admin-login-mobile');
     await UI.button(page, T.loginSend).click();
     await idle(page);
-    await fillOtp(page, await lastCode());
+    const ownerCode = await lastCode();
+    // another visitor asks for a code too and guesses wrong five times: the code the owner was sent still works
+    await api('__clock', { advanceMs: 61000 });
+    const other = await rpc('api_requestCode');
+    for (let i = 0; i < 5; i++) await assert.rejects(rpc('api_verifyCode', other.cid, '000000', 'x'), /غير صحيح|تجاوزت/);
+    await fillOtp(page, ownerCode);
     await UI.appShell(page).waitFor();
     await page.locator('.bottom-nav').waitFor({ state: 'visible' });
     assert.equal(await page.locator('.bottom-nav__item').count(), 5);
@@ -1095,7 +1100,22 @@ describe('e2e', () => {
     await UI.choice(page, T.modeInPerson).waitFor();
     const stored = JSON.parse(await page.evaluate((k) => localStorage.getItem(k), UI.schoolStoreKey));
     const B2 = (await rpc('api_schools', token)).schools.find((s) => s.id === B.id);
-    assert.equal(stored.token, B2.token, 'the new private token is remembered');
+    assert.match(stored.token, /^g[0-9a-f]{32}$/, 'the device keeps a credential bound to the code');
+    assert.ok(!stored.token.includes(B2.token), 'never the private link itself');
+    // a new school code signs out the devices that entered the old one
+    const B3 = (await rpc('api_regeneratePin', token, B.id)).school;
+    await goto(page, 'f=all');
+    await UI.button(page, /^متابعة$/).click();
+    await idle(page);
+    await UI.text(page, T.storedLinkGone).waitFor();
+    await pickSchool(page, SCHOOLS[1].name, B3.pin);
+    await UI.choice(page, T.modeInPerson).waitFor();
+    // «خروج من هذا الجهاز» forgets the school on a shared device
+    await goto(page, 'f=all');
+    await UI.text(page, T.continueAs).waitFor();
+    await UI.button(page, 'خروج من هذا الجهاز').click();
+    await page.locator('#sc-pin').waitFor();
+    assert.equal(await page.evaluate((k) => localStorage.getItem(k), UI.schoolStoreKey), null, 'nothing is remembered');
     // general link switched off
     await rpc('api_saveSettings', token, { links: { generalEnabled: false } });
     await goto(page, 'f=all');
@@ -1583,6 +1603,47 @@ describe('e2e', () => {
     await UI.nav(page, T.nav.settings).click();
     await idle(page);
     assert.equal(await page.locator('#st-weburl').inputValue(), EXEC);
+    await closeClean(h);
+  });
+
+  scenario('sign-in link from the spreadsheet menu: the dashboard opens without an emailed code, once', async () => {
+    await seed.setup();
+    const mails = (await api('__mail')).length;
+    const ticket = (await api('__exec', { fn: 'issueLoginTicket_', args: [] })).result;   // what «🔗 رابط لوحة التحكم» issues
+    assert.match(ticket, /^[0-9a-f]{64}$/);
+    const h = await open('mobile');
+    const { page } = h;
+    await goto(page, 'login=' + ticket);
+    await UI.appShell(page).waitFor();
+    assert.equal((await api('__mail')).length, mails, 'no email was needed');
+    await goto(page, 'login=' + ticket);   // the same address again (a reload): the saved session keeps working
+    await UI.appShell(page).waitFor();
+    await closeClean(h);
+    const h2 = await open('mobile');        // a used link in another browser → the normal login screen
+    await goto(h2.page, 'login=' + ticket);
+    await UI.text(h2.page, T.loginTitle).waitFor();
+    await closeClean(h2);
+  });
+
+  scenario('QR codes are drawn in the page (no third-party script) and scan back to the exact link', async () => {
+    const { token, schools } = await seed.ready();
+    const h = await open('desktop', { token });
+    const { page } = h;
+    const scripts = [];
+    page.on('request', (r) => { if (r.resourceType() === 'script') scripts.push(r.url()); });
+    await goto(page);
+    await UI.nav(page, T.nav.schools).click();
+    await idle(page);
+    const generalLink = (await rpc('api_bootstrap', token)).generalLink;
+    await page.locator('[data-action="general-qr"]').filter({ visible: true }).first().click();
+    let svg = await UI.modal(page).locator('#qr-box svg').evaluate((el) => el.outerHTML);
+    assert.equal(qrDecode(svgToMatrix(svg)).text, generalLink, 'the general link');
+    await page.keyboard.press('Escape');
+    await page.locator('[data-action="school-qr"][data-id="' + schools[0].id + '"]').filter({ visible: true }).first().click();
+    svg = await UI.modal(page).locator('#qr-box svg').evaluate((el) => el.outerHTML);
+    assert.equal(qrDecode(svgToMatrix(svg)).text, schools[0].link, 'a school private link');
+    assert.equal(await UI.modal(page).locator('#qr-box svg').getAttribute('role'), 'img');
+    assert.deepEqual(scripts.filter((u) => !u.startsWith(srv.url)), [], 'no script from another origin');
     await closeClean(h);
   });
 });

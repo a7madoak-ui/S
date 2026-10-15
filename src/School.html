@@ -520,6 +520,7 @@
           <div class="sc-actions">
             <button type="button" class="btn btn-primary btn-lg btn-block" data-action="continue">${icon('chevron-left')}<span>متابعة</span></button>
             <button type="button" class="btn btn-secondary btn-block" data-action="pick-other">${icon('refresh')}<span>تغيير المدرسة</span></button>
+            <button type="button" class="btn btn-ghost btn-block" data-action="pick-forget">${icon('logout')}<span>خروج من هذا الجهاز</span></button>
           </div>
         </div></section>`;
       }
@@ -2176,6 +2177,15 @@
           S.pickId = '';
           S.pickNotice = '';
           render();
+          return;
+        case 'pick-forget':   // a shared device: the saved school (and its code) is removed from it
+          App.store.del('school');
+          S.token = '';
+          S.pickChange = false;
+          S.pickId = '';
+          S.pickNotice = '';
+          render();
+          App.toast('تم الخروج من هذا الجهاز. للدخول مرة أخرى اختر مدرستك وأدخل رمزها.', 'ok');
           return;
         case 'enter': return pickerEnter(el);
         case 'continue': return continueStored(el);

@@ -897,32 +897,6 @@
     return d;
   };
 
-  var scriptCache = {};
-  App.loadScript = function (url) {
-    var key = String(url);
-    if (scriptCache[key]) return scriptCache[key];
-    var p = new Promise(function (resolve, reject) {
-      var s = doc.createElement('script');
-      var done = false;
-      function fail() {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        if (s.parentNode) s.parentNode.removeChild(s);
-        delete scriptCache[key];
-        reject(mkErr('تعذّر تحميل أحد مكوّنات الصفحة — تحقّق من الاتصال بالإنترنت.', 'LOAD_FAILED', key));
-      }
-      var timer = setTimeout(fail, 8000);
-      s.async = true;
-      s.src = key;
-      s.onload = function () { if (done) return; done = true; clearTimeout(timer); resolve(true); };
-      s.onerror = fail;
-      (doc.head || doc.documentElement).appendChild(s);
-    });
-    scriptCache[key] = p;
-    return p;
-  };
-
   App.fillTemplate = function (tpl, data) {
     var d = data || {};
     var map = {
