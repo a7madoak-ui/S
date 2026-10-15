@@ -415,7 +415,7 @@ function safeEq_(a, b) {
   return r === 0;
 }
 
-/** 'ahmad.o.a.k@gmail.com' → 'ah••••••@gmail.com' */
+/** 'supervisor.name@gmail.com' → 'su••••••@gmail.com' */
 function maskEmail_(email) {
   const s = String(email || '');
   const at = s.indexOf('@');
