@@ -1,6 +1,6 @@
 {
   "name": "nabd-schools",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "description": "نبض المدارس — متابعة سير العملية التعليمية: Google Apps Script web app for school supervisors (with a local Apps Script mock for tests).",
   "license": "UNLICENSED",

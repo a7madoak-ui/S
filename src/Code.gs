@@ -1,7 +1,7 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════
  *  نبض المدارس (Nabd) — «متابعة سير العملية التعليمية»
- *  Server code for Google Apps Script (V8 runtime) — version 1.2.1
+ *  Server code for Google Apps Script (V8 runtime) — version 1.2.2
  *
  *  This is a single file on purpose, so a supervisor can paste it into the
  *  Apps Script editor without juggling many files.
@@ -40,7 +40,7 @@
 
 const APP_NAME = 'نبض المدارس';
 const DEFAULT_SYSTEM_TITLE = 'متابعة سير العملية التعليمية';
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.2.2';
 const TZ = 'Asia/Riyadh';
 
 const SH_SCHOOLS = 'المدارس';
@@ -81,7 +81,8 @@ const LIMITS_ = Object.freeze({
   fieldsMax: 25,
   propChunkBytes: 8000,      // Script Properties: 9 KB per value
   answersJsonMax: 45000,     // a Sheets cell holds 50 000 characters
-  countMax: 100000
+  countMax: 100000,
+  clientLogPerDay: 20         // startup-failure reports a page may write to «السجل» per day (anonymous)
 });
 
 const STATUS_LABELS_ = Object.freeze({
@@ -3257,6 +3258,27 @@ function api_submitReport(schoolToken, payload) {
     const receipt = Object.assign(reportOut_(result.rec, fields, retiredKpis_()), { schoolName: school.name });
     return { ok: true, receipt: receipt };
   }, { school: true });
+}
+
+/**
+ * A page that could not start (a stalled download, a blocked resource, a script error in an unusual
+ * browser) reports what the browser saw, so it can be read later in «السجل». Anyone holding a link can
+ * call this, so it only ever writes short plain text, at most LIMITS_.clientLogPerDay rows a day.
+ */
+function api_clientLog(page, details, ua) {
+  return run_(() => {
+    const text = (v, max, multiline) => cleanText_(typeof v === 'string' ? v : '', multiline).slice(0, max);
+    const p = text(page, 20), d = text(details, 600, true), u = text(ua, 160);
+    if (!d) return { ok: true };
+    let allowed = false;
+    withLock_(() => {
+      if (dailyCount_('clientlog') >= LIMITS_.clientLogPerDay) return;
+      dailyAdd_({ clientlog: 1 });
+      allowed = true;
+    });
+    if (allowed) log_('تعذّر تشغيل الصفحة في المتصفح', (p ? '[' + p + '] ' : '') + d + (u ? ' — ' + u : ''));
+    return { ok: true };
+  });
 }
 
 

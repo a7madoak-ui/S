@@ -487,6 +487,20 @@ describe('e2e', () => {
     await closeClean(h);
   });
 
+  scenario('a stalled web-font request never blocks the pages (it froze a real deployment on its loading screen)', async () => {
+    const { schools } = await seed.ready();
+    const h = await open('mobile');
+    const { page } = h;
+    await h.ctx.route(/fonts\.googleapis\.com/, () => { /* never answers, like a filtered network */ });
+    await page.goto(srv.url, { waitUntil: 'domcontentloaded' });
+    await UI.text(page, T.loginTitle).waitFor({ timeout: 8000 });
+    assert.equal(await page.evaluate(() => window.__nabdStarted), true, 'the supervisor page started');
+    await page.goto(srv.url + '?s=' + schools[0].token, { waitUntil: 'domcontentloaded' });
+    await UI.choice(page, T.modeInPerson).waitFor({ timeout: 8000 });
+    assert.equal(await page.evaluate(() => window.__nabdStarted), true, 'the school page started');
+    await closeClean(h);
+  });
+
   scenario('login after setup on a phone (OTP, resend countdown, app shell with bottom navigation)', async () => {
     await seed.setup();
     await api('__clock', { advanceMs: 61000 });

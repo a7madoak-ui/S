@@ -251,7 +251,7 @@ describe('platform contract', () => {
     const t = sys();
     assert.equal(t.app.evaluate('APP_NAME'), 'نبض المدارس');
     assert.equal(t.app.evaluate('DEFAULT_SYSTEM_TITLE'), 'متابعة سير العملية التعليمية');
-    assert.equal(t.app.evaluate('APP_VERSION'), '1.2.1');
+    assert.equal(t.app.evaluate('APP_VERSION'), '1.2.2');
     assert.equal(t.app.evaluate('TZ'), 'Asia/Riyadh');
   });
   it('does not use services outside the declared scopes', () => {
@@ -289,7 +289,7 @@ describe('doGet routing', () => {
     const boot = extractBoot(out.html);
     assert.equal(boot.page, 'admin');
     assert.equal(boot.appName, 'نبض المدارس');
-    assert.equal(boot.version, '1.2.1');
+    assert.equal(boot.version, '1.2.2');
     assert.equal(boot.status.setupDone, false);
     assert.equal(boot.status.ownerEmailMasked, 'su••••••@gmail.com');
     assert.equal(boot.status.deployed, true);
@@ -503,7 +503,7 @@ describe('setup wizard (api_completeSetup)', () => {
     assert.equal(b.systemTitle, 'متابعة سير العملية التعليمية');
     assert.equal(b.schoolsCount, 2);
     assert.equal(b.ownerEmail, OWNER);
-    assert.equal(b.version, '1.2.1');
+    assert.equal(b.version, '1.2.2');
     assert.equal(b.today, '2026-10-14');
     assert.equal(b.now, '07:30');
     assert.equal(b.baseUrl, BASE_URL);
@@ -2646,5 +2646,25 @@ describe('[security] pages load no third-party script; QR codes are drawn inline
     m[m.length - 1][m.length - 3] = !m[m.length - 1][m.length - 3];
     assert.throws(() => qrDecode(m), /syndrome/, 'sanity: the reader rejects a damaged code');
     assert.throws(() => QR.matrix('x'.repeat(2332)), /too long/);
+  });
+});
+
+/* ================================================================== startup-failure reports */
+describe('startup-failure reports from the browser', () => {
+  it('api_clientLog writes short plain text to «السجل», at most 20 rows a day, formula-safe', () => {
+    const t = sys();
+    t.ready();
+    const label = 'تعذّر تشغيل الصفحة في المتصفح';
+    const r = t.call('api_clientLog', 'admin', '=HYPERLINK("http://x")\nnot started after 15 s', 'Mozilla/5.0 test');
+    assert.equal(r.ok, true);
+    let rows = t.sheet(SH.log).values.filter((x) => x[1] === label);
+    assert.equal(rows.length, 1);
+    assert.ok(String(rows[0][2]).includes('[admin]') && String(rows[0][2]).includes('Mozilla/5.0 test'));
+    assert.deepEqual(t.env.formulaWrites, []);
+    for (let i = 0; i < 40; i++) t.call('api_clientLog', 'school', 'x'.repeat(5000), 'ua');
+    rows = t.sheet(SH.log).values.filter((x) => x[1] === label);
+    assert.equal(rows.length, 20, 'capped per day');
+    assert.ok(rows.every((x) => String(x[2]).length <= 1000));
+    assert.equal(t.call('api_clientLog', {}, [], 5).ok, true, 'junk arguments are ignored, never an error');
   });
 });

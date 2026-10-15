@@ -4,12 +4,58 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#0E7C66">
 <title>لوحة المشرف</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+/* Startup guard. The web font loads in the background (a stylesheet in <head> would hold every script
+   below until it arrives, and a stalled font request then froze the page on its loading screen). If the
+   page has still not started after a while, a clear message replaces the endless spinner and what the
+   browser saw is reported to «السجل». */
+(function () {
+  var w = window, d = document, errs = w.__nabdErrors = [];
+  function note(m) { try { if (errs.length < 8) errs.push(String(m).slice(0, 240)); } catch (e) { /* ignore */ } }
+  w.addEventListener('error', function (e) {
+    if (e && e.message) note(e.message + (e.filename ? ' @' + String(e.filename).slice(-48) + ':' + e.lineno : ''));
+  });
+  w.addEventListener('unhandledrejection', function (e) { note('promise: ' + (e && e.reason && (e.reason.message || e.reason))); });
+  try {
+    var l = d.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap';
+    d.head.appendChild(l);
+  } catch (e) { /* the system font stack is fine */ }
+  var box = null, waited = 0;
+  function check() {
+    if (w.__nabdStarted) { if (box && box.parentNode) box.parentNode.removeChild(box); return; }
+    waited += 3;
+    if (waited >= 15 && !box && d.body) {
+      box = d.createElement('div');
+      box.setAttribute('role', 'alert');
+      box.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#F5F7F8;color:#10222B;display:flex;align-items:center;justify-content:center;padding:24px;font:16px/1.7 Tahoma,"Segoe UI",sans-serif;direction:rtl;text-align:center';
+      var inner = d.createElement('div');
+      inner.style.cssText = 'max-width:460px';
+      var h = d.createElement('div');
+      h.style.cssText = 'font-size:20px;font-weight:700;margin-bottom:8px';
+      h.textContent = 'تعذّر تشغيل الصفحة';
+      var t = d.createElement('div');
+      t.textContent = 'قد يكون الاتصال بالإنترنت بطيئًا أو أن المتصفح يمنع جزءًا من الصفحة. حدّث الصفحة من المتصفح، وإن تكرر ذلك فجرّب متصفحًا آخر (مثل Chrome).';
+      var s = d.createElement('div');
+      s.style.cssText = 'margin-top:14px;font-size:12px;color:#5E6E78;direction:ltr;word-break:break-word';
+      s.textContent = errs.length ? errs.join(' | ') : 'no script error recorded';
+      inner.appendChild(h); inner.appendChild(t); inner.appendChild(s); box.appendChild(inner);
+      d.body.appendChild(box);
+      try {
+        var g = w.google && w.google.script && w.google.script.run;
+        if (g) g.withFailureHandler(function () {}).api_clientLog('admin', 'not started after 15 s; ' + (errs.join(' | ') || 'no script error'), String(navigator.userAgent || ''));
+      } catch (e) { /* reporting is best effort */ }
+    }
+    if (waited < 120) setTimeout(check, 3000);
+  }
+  setTimeout(check, 3000);
+})();
+</script>
 <?!= include('Styles') ?>
 <style>
 /* =============================================================================
@@ -4302,7 +4348,13 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     else if (!S.token) Login.show();
     else Shell.start();
   }
-  start();
+  try {
+    start();
+    window.__nabdStarted = true;
+  } catch (err) {
+    try { console.error('[nabd] start failed', err); } catch (e) { /* ignore */ }
+    try { window.__nabdErrors.push('start: ' + ((err && err.message) || err)); } catch (e) { /* ignore */ }
+  }
 })();
 </script>
 </body>
