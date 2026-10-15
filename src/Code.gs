@@ -1,7 +1,7 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════
  *  نبض المدارس (Nabd) — «متابعة سير العملية التعليمية»
- *  Server code for Google Apps Script (V8 runtime) — version 1.1.0
+ *  Server code for Google Apps Script (V8 runtime) — version 1.2.0
  *
  *  This is a single file on purpose, so a supervisor can paste it into the
  *  Apps Script editor without juggling many files.
@@ -40,7 +40,7 @@
 
 const APP_NAME = 'نبض المدارس';
 const DEFAULT_SYSTEM_TITLE = 'متابعة سير العملية التعليمية';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const TZ = 'Asia/Riyadh';
 
 const SH_SCHOOLS = 'المدارس';
@@ -148,7 +148,13 @@ const MSG_ = Object.freeze({
   BAD_DATE: 'التاريخ غير صحيح.',
   REPORT_NOT_FOUND: 'لم يُعثر على التقرير. ربما حُذف أو تغيّر.',
   SCHOOL_NOT_FOUND: 'لم يُعثر على المدرسة. ربما حُذفت.',
-  PHOTO_NOT_FOUND: 'لم يُعثر على الصورة. ربما حُذفت.'
+  PHOTO_NOT_FOUND: 'لم يُعثر على الصورة. ربما حُذفت.',
+  UNAVAILABLE: 'النظام غير متاح مؤقتًا. تواصل مع المشرف.',
+  PERM_MISSING: 'لم تُمنح كل أذونات البرنامج في حساب المشرف. على المشرف فتح ملف Google Sheets الخاص بالبرنامج ← ' +
+    'القائمة «📋 نبض المدارس» ← «📖 خطوات التشغيل»، ثم اختيار «تحديد الكل» ← «متابعة» في نافذة الأذونات.',
+  PERM_DRIVE: 'لم تُمنح صلاحية Google Drive اللازمة لحفظ صور الشواهد. على المشرف فتح ملف Google Sheets الخاص ' +
+    'بالبرنامج ← القائمة «📋 نبض المدارس» ← «📖 خطوات التشغيل»، ثم اختيار «تحديد الكل» ← «متابعة» في نافذة الأذونات.',
+  DRIVE_FULL: 'تعذّر حفظ الصورة لأن مساحة Google Drive لدى المشرف ممتلئة. أرسل التقرير بدون صور وأبلغ المشرف.'
 });
 
 const DEFAULT_MESSAGE_TEMPLATE = [
@@ -176,9 +182,12 @@ const DEFAULT_CFG_ = Object.freeze({
   setupDone: false,
   setupAt: '',
   systemTitle: DEFAULT_SYSTEM_TITLE,
+  webAppUrl: '',               // the deployment URL ('…/exec') every link is built from (see baseUrl_)
   photosFolderId: '',
+  photosFolderIdsOld: [],      // folders replaced after being trashed — their photos stay viewable
+  sheetIds: {},                // data sheet name → sheet id (a renamed data sheet is found and renamed back)
   supervisor: { name: '', title: DEFAULT_SUPERVISOR_TITLE, office: '', phone: '' },
-  schedule: { deadline: '09:00', workdays: [0, 1, 2, 3, 4], allowLate: true },
+  schedule: { deadline: '09:00', workdays: [0, 1, 2, 3, 4], allowLate: true, backfillDays: 2 },
   review: { enabled: true },
   links: { generalEnabled: true },
   alerts: { studentAbsencePct: 10, teacherAbsencePct: 10, activationPct: 80, jumpPct: 50 },
@@ -230,12 +239,17 @@ const DEPLOY_STEPS_ = Object.freeze([
   'من القائمة العلوية في الملف: «الإضافات» ← «Apps Script».',
   'اضغط «نشر» ← «نشر جديد» ← أيقونة الترس ⚙ ← «تطبيق ويب».',
   '«التنفيذ باسم»: أنا — «من يمكنه الوصول»: أي شخص. ثم «نشر».',
-  'اضغط «منح الإذن» ← اختر حسابك ← «خيارات متقدمة» ← «الانتقال إلى … (غير آمن)» ← «سماح». ' +
-    '(هذه النسخة ملكك أنت، والتحذير يظهر لأن البرنامج لم يُنشر في متجر Google.)',
-  'انسخ «رابط تطبيق الويب» وافتحه — سيظهر لك معالج التجهيز. احفظ الرابط في المفضلة.'
+  'اضغط «منح الإذن» ← اختر حسابك ← «خيارات متقدمة» ← «الانتقال إلى … (غير آمن)» ← ضع علامة على «تحديد الكل» ' +
+    '(كل الأذونات) ← «متابعة». (هذه النسخة ملكك أنت، والتحذير يظهر لأن البرنامج لم يُنشر في متجر Google. ' +
+    'إذن Google Drive يستخدمه البرنامج لمجلد صور الشواهد الذي يُنشئه فقط.)',
+  'انسخ «رابط تطبيق الويب» (ينتهي بـ ⁦/exec⁩) وافتحه — سيظهر لك معالج التجهيز. احفظ الرابط في المفضلة.'
 ]);
 const DEPLOY_UPDATE_NOTE_ = 'عند تحديث البرنامج لاحقًا: «نشر» ← «إدارة عمليات النشر» ← تعديل ← «إصدار جديد» — ' +
-  'ليبقى الرابط نفسه دون تغيير.';
+  'ليبقى الرابط نفسه دون تغيير. إذا طلب Google الموافقة على أذونات جديدة (أو توقفت الصور بعد التحديث) فافتح ' +
+  'القائمة «📋 نبض المدارس» ← «📖 خطوات التشغيل» واختر «تحديد الكل» ← «متابعة».';
+
+/** A deployed web-app URL: script.google.com/macros/s/<id>/exec (or the Workspace /a/macros/<domain>/ form). */
+const WEBAPP_URL_RE_ = /^https:\/\/script\.google\.com\/(?:a\/macros\/[^\/?#\s]+|macros)\/s\/[\w-]+\/exec$/;
 const PRIVACY_NOTE_ = 'بياناتك محفوظة في هذا الملف وفي مجلد الشواهد داخل حسابك فقط';
 
 // Per-execution memo (Apps Script starts every execution with fresh globals;
@@ -515,9 +529,33 @@ function createdDate_(school) {
   const d = String((school && school.createdAt) || '').slice(0, 10);
   return isIsoDate_(d) ? d : '';
 }
-function existedOn_(school, iso) {
+/**
+ * First day a report is due from the school: the day it was added, or the next day when it was added
+ * after that day's deadline (e.g. set up in the evening). '' = unknown (old rows → always due).
+ */
+function firstDueDate_(school, deadline) {
   const c = createdDate_(school);
+  if (!c) return '';
+  const hm = String(school.createdAt).slice(11, 16);
+  return isHHMM_(hm) && isHHMM_(deadline) && hm > deadline ? addDays_(c, 1) : c;
+}
+function existedOn_(school, iso, deadline) {
+  const c = firstDueDate_(school, deadline);
   return !c || c <= iso;
+}
+/**
+ * The last `n` workdays strictly before `today` (newest first) — the days a school may still
+ * report late when it sent nothing (schedule.backfillDays).
+ */
+function backfillDates_(today, workdays, holidaySet, n) {
+  const out = [];
+  if (!(n > 0) || !(workdays || []).length) return out;
+  let d = today;
+  for (let i = 0; i < 60 && out.length < n; i++) {
+    d = addDays_(d, -1);
+    if (isWorkday_(d, workdays, holidaySet)) out.push(d);
+  }
+  return out;
 }
 
 // ---------- times ----------
@@ -556,12 +594,26 @@ function fmtPct_(x) {
 
 // ---------- phone numbers ----------
 
-/** Keeps digits and a leading '+'; ≤ 15 digits. Returns {ok, value}. */
+/**
+ * Digits only (≤ 15): spaces, dashes and brackets are dropped and an international prefix
+ * '+' or '00' becomes plain digits ('+966 55 111 2233' → '966551112233'), so a phone is never
+ * stored with a formula-guard apostrophe and reads the same in RTL lines. Returns {ok, value}.
+ */
 function normalizePhone_(v) {
-  const s = normDigits_(cleanText_(v)).replace(/[\s\-().\u200E\u200F_]/g, '');
+  let s = normDigits_(cleanText_(v)).replace(/[\s\-().\u200E\u200F_]/g, '');
   if (!s) return { ok: true, value: '' };
-  if (!/^\+?\d{3,15}$/.test(s)) return { ok: false, value: '' };
+  if (/^\+\d/.test(s)) s = s.slice(1);
+  else if (/^00\d/.test(s)) s = s.slice(2);
+  if (!/^\d{3,15}$/.test(s)) return { ok: false, value: '' };
   return { ok: true, value: s };
+}
+
+// ---------- web-app URL ----------
+
+/** A clean deployment URL ('…/exec', no query/hash) or '' (test /dev URLs and anything else are rejected). */
+function cleanWebAppUrl_(u) {
+  const s = String(u === null || u === undefined ? '' : u).trim().split('#')[0].split('?')[0];
+  return WEBAPP_URL_RE_.test(s) ? s : '';
 }
 
 // ---------- report status ----------
@@ -809,15 +861,38 @@ function isAttendanceShape_(v) {
   return isObj_(v) && ATT_ROWS_.some((r) => isObj_(v[r]) && ('present' in v[r] || 'absent' in v[r]));
 }
 
-/** Derived metrics of one report (spec §5/§6 `derived`). */
-function deriveReport_(fields, answers) {
+/**
+ * A KPI answer: from the current KPI question, or — for reports saved before that question was
+ * deleted / re-created — from a retired question id that carried the same KPI. Retired ids still
+ * used by any current question are ignored (its answers now mean something else).
+ */
+function kpiVal_(a, fl, kpi, retired) {
+  const f = kpiField_(fl, kpi);
+  const ok = (v) => (kpi === 'mode' ? typeof v === 'string' && v !== '' : isNum_(v));
+  if (f && ok(a[f.id])) return a[f.id];
+  const ids = isObj_(retired) && Array.isArray(retired[kpi]) ? retired[kpi] : [];
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (typeof id !== 'string' || fl.some((x) => x.id === id)) continue;
+    if (ok(a[id])) return a[id];
+  }
+  return null;
+}
+
+/**
+ * Derived metrics of one report (spec §5/§6 `derived`). `retired` ({kpi: [old field ids]}, optional)
+ * keeps the KPIs of reports answered with questions that were deleted or re-created since.
+ */
+function deriveReport_(fields, answers, retired) {
   const a = isObj_(answers) ? answers : {};
   const fl = Array.isArray(fields) ? fields : [];
   const d = { attendance: {}, lessons: null, mode: null, lateStudents: null, photosCount: 0 };
 
+  // At most one attendance question exists, so an answer of attendance shape under another id
+  // belongs to a deleted / re-created attendance question — use it when the current one is empty.
   const attF = typeField_(fl, 'attendance');
   let att = attF ? a[attF.id] : null;
-  if (!attF) {
+  if (!isAttendanceShape_(att)) {
     const k = Object.keys(a).filter((key) => isAttendanceShape_(a[key]))[0];
     att = k ? a[k] : null;
   }
@@ -832,9 +907,9 @@ function deriveReport_(fields, answers) {
 
   const fp = kpiField_(fl, 'lessons_planned');
   const fd = kpiField_(fl, 'lessons_done');
-  if (fp || fd) {
-    const planned = fp && isNum_(a[fp.id]) ? a[fp.id] : null;
-    const done = fd && isNum_(a[fd.id]) ? a[fd.id] : null;
+  const planned = kpiVal_(a, fl, 'lessons_planned', retired);
+  const done = kpiVal_(a, fl, 'lessons_done', retired);
+  if (fp || fd || planned !== null || done !== null) {
     const both = planned !== null && done !== null;
     d.lessons = {
       planned: planned,
@@ -844,18 +919,15 @@ function deriveReport_(fields, answers) {
     };
   }
 
-  const fm = kpiField_(fl, 'mode');
-  if (fm && typeof a[fm.id] === 'string' && a[fm.id]) d.mode = a[fm.id];
-
-  const fls = kpiField_(fl, 'late_students');
-  if (fls && isNum_(a[fls.id])) d.lateStudents = a[fls.id];
+  d.mode = kpiVal_(a, fl, 'mode', retired);
+  d.lateStudents = kpiVal_(a, fl, 'late_students', retired);
 
   d.photosCount = photoIds_(a).length;
   return d;
 }
 
 /** Public Report object (spec §6) from an internal record. */
-function reportOut_(rec, fields) {
+function reportOut_(rec, fields, retired) {
   return {
     date: rec.date,
     status: rec.status,
@@ -867,7 +939,7 @@ function reportOut_(rec, fields) {
     edits: rec.edits || 0,
     reviewNote: rec.reviewNote || '',
     reviewedAt: rec.reviewedAt || '',
-    derived: deriveReport_(fields, rec.answers)
+    derived: deriveReport_(fields, rec.answers, retired)
   };
 }
 
@@ -899,6 +971,7 @@ function formState_(pastDeadline, allowLate, hasExisting) {
 // ---------- 3.5 Bulk school text (spec §6.5) ----------
 
 const BULK_HEADER_WORDS_ = Object.freeze(['اسم المدرسة', 'المدرسة', 'المدارس', 'اسم المدرسه', 'name', 'school']);
+const BULK_LEAD_CELL_RE_ = /^(?:[\d٠-٩]{1,15}|م|#)$/;
 
 /**
  * Parses pasted school lines: `name [, principal [, phone [, students [, teachers [, staff]]]]]`
@@ -915,6 +988,9 @@ function parseBulkSchools_(text, existingNames) {
     count++;
     const lineNo = i + 1;
     const parts = line.split(/[\t,،|]/).map((p) => cleanText_(p));
+    // Excel lists often start with a serial «م» or a ministry-number column: drop a purely
+    // numeric first cell (or the «م» / «#» header cell) when more cells follow.
+    if (parts.length > 1 && BULK_LEAD_CELL_RE_.test(parts[0])) parts.shift();
     let name = parts[0]
       .replace(/^[\d٠-٩]{1,3}\s*[-.)–]\s*/, '')
       .replace(/^[•●▪\-*]\s*/, '')
@@ -964,10 +1040,10 @@ function workdaysPhrase_(n) {
 
 /**
  * Builds the day dashboard from plain data.
- * o = { date, today, now, deadline, workdays, holidays, thresholds, reviewEnabled,
+ * o = { date, today, now, deadline, workdays, holidays, thresholds, reviewEnabled, allowLate, backfillDays,
  *       schools:[school], reports:{schoolId: Report}, snapshots:{schoolId: name},
  *       history:{schoolId:[pct,…newest first]}, datesBySchool:{schoolId:{date:true}},
- *       pendingOther:[…], modeOptions:[…], baseUrl }
+ *       pendingOther:[…], returnedOther:[…], modeOptions:[…], baseUrl }
  */
 function buildDay_(o) {
   const hs = toSet_(o.holidays || []);
@@ -978,15 +1054,21 @@ function buildDay_(o) {
   const elapsed = o.date <= o.today;
   const deadlinePassed = o.date < o.today || (isToday && o.now > o.deadline);
   const reports = o.reports || {};
+  // Can a school WITHOUT a report still send one for this date? (today: unless closed after the
+  // deadline; a past workday: only inside the late-reporting window, schedule.backfillDays)
+  const canSubmit = isToday
+    ? (!isWorkday || o.allowLate !== false || !(o.now > o.deadline))
+    : (o.date < o.today && isWorkday &&
+      backfillDates_(o.today, o.workdays, hs, o.backfillDays || 0).indexOf(o.date) >= 0);
 
-  // Rows: active schools that existed on that date + any school that has a report that day.
+  // Rows: active schools due that day + any school that has a report that day.
   const rows = [];
   const included = {};
   (o.schools || []).forEach((s) => {
     const rep = reports[s.id] || null;
-    if (!rep && (!s.active || !existedOn_(s, o.date))) return;
+    if (!rep && (!s.active || !existedOn_(s, o.date, o.deadline))) return;
     included[s.id] = true;
-    rows.push({ school: schoolRef_(s, o.baseUrl), report: rep, flags: [], _created: createdDate_(s) });
+    rows.push({ school: schoolRef_(s, o.baseUrl), report: rep, flags: [], _created: firstDueDate_(s, o.deadline) });
   });
   Object.keys(reports).forEach((id) => {
     if (included[id]) return;
@@ -1106,16 +1188,20 @@ function buildDay_(o) {
 
   return {
     date: o.date,
+    today: o.today,
     isWorkday: isWorkday,
     isHoliday: isHoliday,
     isToday: isToday,
     now: o.now,
     deadline: o.deadline,
+    allowLate: o.allowLate !== false,
+    canSubmit: canSubmit,
     reviewEnabled: !!o.reviewEnabled,
     totals: totals,
     rows: rows,
     alerts: alerts,
-    pendingOther: o.pendingOther || []
+    pendingOther: o.pendingOther || [],
+    returnedOther: o.returnedOther || []
   };
 }
 
@@ -1134,8 +1220,12 @@ function addSums_(s, d) {
 /**
  * Statistics for a date range from plain data. Ratios come from sums
  * (Σ absent / Σ total), never from averages of averages.
- * o = { from, to, today, workdays, holidays, schools, modeOptions,
+ * o = { from, to, today, now, deadline, workdays, holidays, schools, modeOptions,
  *       recs:[{date, schoolId, schoolName, status, late, derived}] }
+ * Today counts as expected only for schools that already reported until the deadline passes
+ * (`now`/`deadline` absent → today is fully expected), so mornings do not drag compliance down.
+ * `onTime` / `onTimeDays` count reports on expected days only (always ≤ `expected` / `expectedDays`);
+ * `submitted` / `submittedDays` count every report (off days, inactive or deleted schools included).
  */
 function buildRange_(o) {
   const hs = toSet_(o.holidays || []);
@@ -1175,12 +1265,16 @@ function buildRange_(o) {
     if (wd && elapsed) workdays++;
     const expectedIds = {};
     let expected = 0;
+    const recs = byDate[date] || [];
     if (wd && elapsed) {
+      const notDueYet = date === o.today && isHHMM_(o.deadline) && isHHMM_(o.now) && o.now <= o.deadline;
+      const sent = toSet_(recs.map((r) => r.schoolId));
       (o.schools || []).forEach((s) => {
-        if (s.active && existedOn_(s, date)) { expectedIds[s.id] = true; expected++; per[s.id].expectedDays++; }
+        if (s.active && existedOn_(s, date, o.deadline) && (!notDueYet || sent[s.id])) {
+          expectedIds[s.id] = true; expected++; per[s.id].expectedDays++;
+        }
       });
     }
-    const recs = byDate[date] || [];
     const sums = newSums_();
     let late = 0, subExp = 0;
     recs.forEach((r) => {
@@ -1199,6 +1293,7 @@ function buildRange_(o) {
       date: date,
       isWorkday: wd,
       submitted: recs.length,
+      onTime: subExp,
       expected: expected,
       compliancePct: pct_(subExp, expected),
       studentAbsencePct: pct_(sums.sa, sums.st),
@@ -1214,6 +1309,8 @@ function buildRange_(o) {
       id: p.id,
       name: p.name,
       submittedDays: p.submittedDays,
+      onTimeDays: p.onTime,
+      extraDays: p.submittedDays - p.onTime,
       expectedDays: p.expectedDays,
       compliancePct: pct_(p.onTime, p.expectedDays),
       avgStudentAbsencePct: pct_(p.sums.sa, p.sums.st),
@@ -1292,25 +1389,60 @@ function fail_(msg) {
   throw e;
 }
 
+/** Like fail_, for a hand-edited sheet layout the app refuses to touch (supervisor-facing text). */
+function layoutFail_(msg) {
+  const e = new Error(msg);
+  e.nabdUser = true;
+  e.nabdLayout = true;
+  throw e;
+}
+
+/** A platform error caused by a permission (scope) the owner did not grant. */
+function isPermErr_(e) {
+  return /not sufficient|do not have permission|Required permissions|Authorization is required|authorization required/i
+    .test(String((e && e.message) || e || ''));
+}
+
+/** True when the owner skipped some permissions on Google's (granular) consent screen. Never throws. */
+function scopesMissing_() {
+  try {
+    const info = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL);
+    return info.getAuthorizationStatus() === ScriptApp.AuthorizationStatus.REQUIRED;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Clear Arabic text for a permission problem (null when `e` is not one). */
+function permMessage_(e) {
+  if (!isPermErr_(e) && !scopesMissing_()) return null;
+  return /DriveApp|auth\/drive/.test(String((e && e.message) || e || '')) ? MSG_.PERM_DRIVE : MSG_.PERM_MISSING;
+}
+
 /**
  * Runs an exposed function: bootstrap first, then the body. Expected errors
  * (fail_) reach the client unchanged; anything else is logged and replaced by
  * a calm Arabic message, so users never see raw stack traces.
+ * opts.school = true for principal-facing calls: a sheet-layout problem (meant for the
+ * supervisor) becomes the neutral «النظام غير متاح مؤقتًا».
  */
 function run_(fn, opts) {
   try {
     bootstrap_(opts);
     return fn();
   } catch (e) {
+    if (e && e.nabdLayout && opts && opts.school) fail_(MSG_.UNAVAILABLE);
     if (e && e.nabdUser) throw e;
     try { console.error((e && e.stack) || String(e)); } catch (ignore) { /* no console */ }
+    const perm = permMessage_(e);
+    if (perm) fail_(perm);
     throw new Error(MSG_.UNEXPECTED);
   }
 }
 
 /** Drops cached sheet/config data (after acquiring the lock, data may have changed). */
 function invalidate_() {
-  const keep = { ss: MEMO_.ss, sheetsOk: MEMO_.sheetsOk, baseUrl: MEMO_.baseUrl };
+  const keep = { ss: MEMO_.ss, sheetsOk: MEMO_.sheetsOk, baseUrl: MEMO_.baseUrl, layoutOk: MEMO_.layoutOk };
   MEMO_ = keep;
 }
 
@@ -1443,11 +1575,38 @@ function fields_() {
 
 function saveFields_(fields) {
   return withLock_(() => {
+    retireKpis_(fields_(), fields);
     setBigProp_('fields', JSON.stringify(fields));
     MEMO_.fields = fields;
     syncFieldCols_(sheet_(SH_REPORTS), fields);
     return fields;
   });
+}
+
+/** {kpi: [field ids]} of KPI questions that were deleted / replaced — keeps past reports' KPIs readable. */
+function retiredKpis_() {
+  if (MEMO_.retiredKpis) return MEMO_.retiredKpis;
+  const r = readJsonProp_('retiredKpis', {});
+  MEMO_.retiredKpis = isObj_(r) ? r : {};
+  return MEMO_.retiredKpis;
+}
+
+/** Remembers the ids of KPI questions that the new form no longer uses for that KPI (inside the lock). */
+function retireKpis_(oldFields, newFields) {
+  const cur = {};
+  (newFields || []).forEach((f) => { if (f.kpi) cur[f.kpi] = f.id; });
+  const r = clone_(retiredKpis_());
+  let changed = false;
+  (oldFields || []).forEach((f) => {
+    if (!f || !f.kpi || cur[f.kpi] === f.id || typeof f.id !== 'string') return;
+    const list = Array.isArray(r[f.kpi]) ? r[f.kpi].filter((x) => x !== f.id) : [];
+    list.unshift(f.id);
+    r[f.kpi] = list.slice(0, 6);
+    changed = true;
+  });
+  if (!changed) return;
+  setBigProp_('retiredKpis', JSON.stringify(r));
+  MEMO_.retiredKpis = r;
 }
 
 function holidays_() {
@@ -1464,14 +1623,27 @@ function fieldColsMap_() {
   return MEMO_.fieldCols;
 }
 
-/** Published web-app URL ('/exec'), or null when the app is not deployed yet. */
+/** What ScriptApp reports as this script's URL ('' when unknown). Never throws. */
+function serviceUrl_() {
+  try { return String(ScriptApp.getService().getUrl() || ''); } catch (e) { return ''; }
+}
+/** The page was opened from the test deployment (…/dev) — its links do not work for schools. */
+function devMode_() { return /\/dev(?:[?#].*)?$/.test(serviceUrl_()); }
+
+/**
+ * The deployment URL every school / general link is built from, or null when unknown.
+ * The URL saved in the settings (cfg.webAppUrl) always wins: ScriptApp.getService().getUrl() is
+ * the HEAD '/dev' URL in the test deployment (a different id from the real '/exec' one, so it is
+ * never rewritten) and is unreliable outside a web-app request. A live '/exec' URL is only a fallback.
+ */
 function baseUrl_() {
   if (MEMO_.baseUrl !== undefined) return MEMO_.baseUrl;
-  let u = null;
-  try { u = ScriptApp.getService().getUrl() || null; } catch (e) { u = null; }
-  if (u) u = String(u).split('#')[0].split('?')[0].replace(/\/dev$/, '/exec');
-  MEMO_.baseUrl = u || null;
+  MEMO_.baseUrl = cleanWebAppUrl_(cfg_().webAppUrl) || cleanWebAppUrl_(serviceUrl_()) || null;
   return MEMO_.baseUrl;
+}
+/** Only the saved URL — for menu dialogs and triggers, where getUrl() cannot know the deployment. */
+function baseUrlStored_() {
+  return cleanWebAppUrl_(cfg_().webAppUrl) || null;
 }
 function linkWith_(base, query) {
   return base ? base + (base.indexOf('?') >= 0 ? '&' : '?') + query : null;
@@ -1484,7 +1656,13 @@ function generalLink_(base) { return linkWith_(base, 'f=all'); }
 // 5. Storage — sheets, «ابدأ هنا», schools, reports, dynamic columns, log
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** The bound spreadsheet (fallback: openById(cfg.ssId)). Memoised per execution. */
+const DATA_SS_NAME_ = 'نبض المدارس — البيانات';
+
+/**
+ * The data spreadsheet, memoised per execution: the bound (active) spreadsheet; else
+ * openById(cfg.ssId); else — a standalone install with nothing stored yet — a new spreadsheet
+ * «نبض المدارس — البيانات» in the owner's Drive, whose id is saved (bootstrap_ then adds the sheets).
+ */
 function ss_() {
   if (MEMO_.ss) return MEMO_.ss;
   let ss = null;
@@ -1492,6 +1670,16 @@ function ss_() {
   if (!ss) {
     const stored = readJsonProp_('cfg', {});
     if (stored && stored.ssId) ss = SpreadsheetApp.openById(stored.ssId);
+  }
+  if (!ss) {
+    ss = withLock_(() => {
+      const again = readJsonProp_('cfg', {});
+      if (again && again.ssId) return SpreadsheetApp.openById(again.ssId);
+      const created = SpreadsheetApp.create(DATA_SS_NAME_);
+      try { created.setSpreadsheetTimeZone(TZ); } catch (e) { /* optional */ }
+      saveCfg_({ ssId: created.getId() });
+      return created;
+    });
   }
   if (!ss) throw new Error('Spreadsheet not available');
   MEMO_.ss = ss;
@@ -1509,6 +1697,27 @@ function sheetDef_(name) {
   return null;
 }
 
+/**
+ * A data sheet by name; when it was renamed by hand («المدارس 1447») it is found by its saved
+ * sheet id and renamed back, instead of a new empty sheet being created (links would all break).
+ */
+function findDataSheet_(ss, name) {
+  const sh = ss.getSheetByName(name);
+  if (sh) return sh;
+  const id = (cfg_().sheetIds || {})[name];
+  if (id === undefined || id === null || id === '') return null;
+  const all = ss.getSheets();
+  for (let i = 0; i < all.length; i++) {
+    let sid = null;
+    try { sid = all[i].getSheetId(); } catch (e) { sid = null; }
+    if (String(sid) === String(id) && SHEET_DEFS_.every((d) => d.name !== all[i].getName())) {
+      try { all[i].setName(name); } catch (e) { return null; }
+      return all[i];
+    }
+  }
+  return null;
+}
+
 /** Creates/repairs the data sheets (idempotent; cheap when everything exists). */
 function ensureSheets_() {
   if (MEMO_.sheetsOk) return;
@@ -1517,11 +1726,18 @@ function ensureSheets_() {
     const sh = ss.getSheetByName(d.name);
     return !sh || sh.getLastRow() === 0;
   });
+  let repaired = false;
   if (broken()) {
+    repaired = true;
     withLock_(() => {
       let reportsCreated = false;
+      const restored = [];
       SHEET_DEFS_.forEach((d) => {
         let sh = ss.getSheetByName(d.name);
+        if (!sh) {
+          sh = findDataSheet_(ss, d.name);   // renamed by hand → renamed back
+          if (sh) restored.push(d.name);
+        }
         if (!sh) sh = ss.insertSheet(d.name);
         if (sh.getLastRow() === 0) {
           setupDataSheet_(sh, d);
@@ -1534,9 +1750,28 @@ function ensureSheets_() {
         MEMO_.fieldCols = null;
         syncFieldCols_(ss.getSheetByName(SH_REPORTS), fields_());
       }
+      restored.forEach((name) => log_('استعادة اسم ورقة', 'أُعيد اسم الورقة «' + name + '» لأن النظام يعتمد عليه.'));
     });
   }
   MEMO_.sheetsOk = true;
+  rememberSheetIds_(ss, repaired);
+}
+
+/** Saves the data sheets' ids (first run, or after a repair) so a renamed sheet can be found again. */
+function rememberSheetIds_(ss, force) {
+  try {
+    const stored = cfg_().sheetIds || {};
+    if (!force && SHEET_DEFS_.every((d) => stored[d.name] !== undefined && stored[d.name] !== '')) return;
+    const ids = {};
+    let changed = false;
+    SHEET_DEFS_.forEach((d) => {
+      const sh = ss.getSheetByName(d.name);
+      if (!sh) return;
+      ids[d.name] = sh.getSheetId();
+      if (String(stored[d.name]) !== String(ids[d.name])) changed = true;
+    });
+    if (changed) saveCfg_({ sheetIds: ids });
+  } catch (e) { /* optional */ }
 }
 
 function setupDataSheet_(sh, d) {
@@ -1559,6 +1794,8 @@ function setupDataSheet_(sh, d) {
   }
   if (d.name === SH_SCHOOLS) {
     try {
+      sh.getRange(1, 1).setNote('معرّف داخلي يستخدمه النظام — لا تعدّله. لا تُدرج أعمدة أو صفوفًا قبل العمود الأخير — ' +
+        'أضف أعمدتك بعد «تاريخ الإضافة».');
       sh.getRange(1, 10).setNote('رمز الرابط الخاص بالمدرسة. لتغييره استخدم «تغيير الرابط» من لوحة التحكم.');
       sh.getRange(1, 11).setNote('رمز من 4 أرقام تستخدمه المدرسة مع الرابط العام فقط.');
     } catch (e) { /* ignore */ }
@@ -1643,7 +1880,41 @@ function sheet_(name) {
   ensureSheets_();
   const sh = ss_().getSheetByName(name);
   if (!sh) throw new Error('Missing sheet ' + name);
+  if (name === SH_SCHOOLS || name === SH_REPORTS) checkLayout_(sh, sheetDef_(name));
   return sh;
+}
+
+/** First header that is not where the app expects it: {col, want, got} or null. Pure. */
+function layoutMismatch_(headers, row) {
+  for (let i = 0; i < headers.length; i++) {
+    const got = cleanText_(cellStr_(row[i]));
+    if (got !== headers[i]) return { col: i + 1, want: headers[i], got: got };
+  }
+  return null;
+}
+
+function layoutMessage_(sheetName, bad) {
+  return 'تم تعديل أعمدة الورقة «' + sheetName + '» (أُضيف عمود أو حُذف أو نُقل، أو أُضيف صف فوق العناوين): ' +
+    'العمود ' + String.fromCharCode(64 + bad.col) + ' يجب أن يكون «' + bad.want + '»' +
+    (bad.got ? ' وفيه الآن «' + bad.got.slice(0, 40) + '»' : ' وهو الآن فارغ') + '. ' +
+    'أعِد الورقة كما كانت (تراجع بـ Ctrl+Z، أو احذف العمود أو الصف المضاف، أو استرجع نسخة سابقة من ' +
+    '«ملف ← سجل الإصدارات») ثم حدّث الصفحة. يمكنك إضافة أعمدتك بعد آخر عمود فقط. لم يُعدَّل أي شيء.';
+}
+
+/**
+ * «المدارس» and «التقارير» are read by column position, so their row-1 headers must be exactly
+ * the app's. A hand-inserted / deleted column (or a title row above the headers) stops every read
+ * and write with a clear message instead of silently reading the wrong columns (and, for schools,
+ * "repairing" every link and pin). Checked once per execution and sheet.
+ */
+function checkLayout_(sh, d, fresh) {
+  const ok = MEMO_.layoutOk || (MEMO_.layoutOk = {});
+  if (ok[d.name] && !fresh) return;
+  const n = Math.min(d.headers.length, Math.max(sh.getMaxColumns(), 1));
+  const row = sh.getRange(1, 1, 1, n).getValues()[0];
+  const bad = layoutMismatch_(d.headers, row);
+  if (bad) layoutFail_(layoutMessage_(d.name, bad));
+  ok[d.name] = true;
 }
 
 // ---------- «ابدأ هنا» start sheet ----------
@@ -1707,9 +1978,9 @@ function buildStartSheet_(ss) {
   sh.getRange(8, 2, DEPLOY_STEPS_.length, 1).setBackground(BRAND_COLOR).setFontColor('#FFFFFF')
     .setFontWeight('bold').setFontSize(14).setHorizontalAlignment('center');
   sh.getRange(8, 3, DEPLOY_STEPS_.length, 1).setFontSize(13);
-  for (let r = 8; r < 8 + DEPLOY_STEPS_.length; r++) sh.setRowHeight(r, r === 12 ? 66 : 44);
+  for (let r = 8; r < 8 + DEPLOY_STEPS_.length; r++) sh.setRowHeight(r, r === 12 ? 88 : 44);
   sh.getRange(14, 3).setFontSize(11).setFontColor('#6B7C86');
-  sh.setRowHeight(14, 36);
+  sh.setRowHeight(14, 54);
   sh.getRange(16, 2, 1, W).setBackground('#FBF3E2');
   sh.getRange(16, 2).setFontSize(13).setFontWeight('bold').setFontColor('#7A5A12');
   sh.setRowHeight(16, 40);
@@ -1737,6 +2008,8 @@ function schoolRow_(s) {
     s.students || 0, s.teachers || 0, s.staff || 0, s.token, s.pin, s.active ? 'نعم' : 'لا', s.createdAt || ''];
 }
 
+const INACTIVE_RE_ = /^(?:لا|false|0|no|غير نشطة|موقوفة)$/i;
+
 /** One sheet row → school object (null for blank rows). Pure. */
 function parseSchoolRow_(v, row) {
   const name = cleanText_(cellStr_(v[1]));
@@ -1744,6 +2017,8 @@ function parseSchoolRow_(v, row) {
   let pin = normDigits_(cellStr_(v[10])).trim();
   if (/^\d{1,4}$/.test(pin)) pin = ('0000' + pin).slice(-4);
   const activeRaw = cellStr_(v[11]).trim();
+  const phoneRaw = cleanText_(cellStr_(v[5]));
+  const phone = normalizePhone_(phoneRaw);
   return {
     _row: row,
     id: cellStr_(v[0]).trim(),
@@ -1751,13 +2026,13 @@ function parseSchoolRow_(v, row) {
     ministryNo: cleanText_(cellStr_(v[2])),
     stage: cleanText_(cellStr_(v[3])),
     principal: cleanText_(cellStr_(v[4])),
-    phone: cleanText_(cellStr_(v[5])),
+    phone: phone.ok ? phone.value : phoneRaw,
     students: clampCount_(v[6]),
     teachers: clampCount_(v[7]),
     staff: clampCount_(v[8]),
     token: cellStr_(v[9]).trim(),
     pin: pin,
-    active: activeRaw === '' ? true : toBool_(activeRaw),
+    active: activeRaw === '' || !INACTIVE_RE_.test(activeRaw),   // only an explicit «لا» stops a school
     createdAt: cellStr_(v[12]).trim(),
     _activeBlank: activeRaw === ''
   };
@@ -1792,12 +2067,16 @@ function readSchools_() {
   return list;
 }
 
-/** Gives hand-typed / duplicated rows a fresh id, token and pin (inside the lock). */
+/**
+ * Gives hand-typed / duplicated rows a fresh id, token and pin (inside the lock). The header row is
+ * re-checked first: a shifted layout must never be "repaired" (it would replace every link and pin).
+ */
 function repairSchools_(sh) {
+  checkLayout_(sh, sheetDef_(SH_SCHOOLS), true);
   const last = sh.getLastRow();
   if (last < 2) return [];
   const vals = sh.getRange(2, 1, last - 1, SCHOOL_COLS_.length).getValues();
-  const ids = {}, toks = {}, list = [];
+  const ids = {}, toks = {}, list = [], fixed = [];
   vals.forEach((v, i) => {
     const s = parseSchoolRow_(v, i + 2);
     if (!s) return;
@@ -1815,10 +2094,14 @@ function repairSchools_(sh) {
       if (fresh && !s.createdAt) s.createdAt = nowTs_();
       s._activeBlank = false;
       writeBlock_(sh, s._row, 1, [schoolRow_(s)]);
+      fixed.push(s.name);
     }
     ids[s.id] = true; toks[s.token] = true;
     list.push(s);
   });
+  if (fixed.length) {
+    log_('إكمال بيانات صفوف المدارس', fixed.length + ' صف (معرّف/رابط/رمز ناقص أو مكرر): ' + fixed.slice(0, 20).join('، '));
+  }
   return list;
 }
 
@@ -2003,27 +2286,50 @@ function saveReportsFixed_(recs) {
   MEMO_.rIndex = null;
 }
 
-/** Mirror columns for the CURRENT fields; columns of removed fields are left untouched. */
+/**
+ * Mirror columns for the CURRENT fields; columns of removed fields are left untouched. These columns
+ * are only a readable copy (answersJson in column M is authoritative and already written), so a
+ * failure here is logged and never fails the submission.
+ */
 function writeMirror_(sh, row, answers) {
-  const fields = fields_();
-  const map = ensureFieldCols_(sh, fields);
-  const cells = fieldColumns_(fields)
-    .filter((c) => map[c.key] > REPORT_FIXED_COLS_)
-    .map((c) => ({ col: map[c.key], value: mirrorValue_(c, answers) }))
-    .sort((a, b) => a.col - b.col);
-  let i = 0;
-  while (i < cells.length) {
-    let j = i;
-    while (j + 1 < cells.length && cells[j + 1].col === cells[j].col + 1) j++;
-    writeBlock_(sh, row, cells[i].col, [cells.slice(i, j + 1).map((c) => c.value)]);
-    i = j + 1;
+  try {
+    const fields = fields_();
+    const map = ensureFieldCols_(sh, fields);
+    const cells = fieldColumns_(fields)
+      .filter((c) => map[c.key] > REPORT_FIXED_COLS_)
+      .map((c) => ({ col: map[c.key], value: mirrorValue_(c, answers) }))
+      .sort((a, b) => a.col - b.col);
+    if (!cells.length) return;
+    ensureCols_(sh, cells[cells.length - 1].col);   // a deleted column must not push writes off the sheet
+    let i = 0;
+    while (i < cells.length) {
+      let j = i;
+      while (j + 1 < cells.length && cells[j + 1].col === cells[j].col + 1) j++;
+      writeBlock_(sh, row, cells[i].col, [cells.slice(i, j + 1).map((c) => c.value)]);
+      i = j + 1;
+    }
+  } catch (e) {
+    try { console.error('writeMirror_: ' + ((e && e.stack) || e)); } catch (ignore) { /* no console */ }
   }
 }
 
+/**
+ * The column map for `fields`, verified against the header row: when a column was inserted,
+ * deleted or moved by hand, the keys whose header no longer matches are dropped and found again
+ * by their header text (syncFieldCols_), so values never land under the wrong heading.
+ */
 function ensureFieldCols_(sh, fields) {
   const map = fieldColsMap_();
-  const ok = fieldColumns_(fields).every((c) => map[c.key] > REPORT_FIXED_COLS_);
-  return ok ? map : syncFieldCols_(sh, fields);
+  const specs = fieldColumns_(fields);
+  if (!specs.every((c) => map[c.key] > REPORT_FIXED_COLS_)) return syncFieldCols_(sh, fields);
+  if (MEMO_.mirrorOk) return map;
+  const lastCol = Math.max(sh.getLastColumn(), 1);
+  const header = sh.getRange(1, 1, 1, lastCol).getValues()[0].map((v) => cleanText_(cellStr_(v)));
+  const stale = specs.filter((c) => header[map[c.key] - 1] !== cleanText_(c.header));
+  if (!stale.length) { MEMO_.mirrorOk = true; return map; }
+  const out = syncFieldCols_(sh, fields, stale.map((c) => c.key));
+  MEMO_.mirrorOk = true;
+  return out;
 }
 
 /**
@@ -2031,17 +2337,26 @@ function ensureFieldCols_(sh, fields) {
  * new key → append a column (or re-use an unmapped column with the same header),
  * renamed field → update the header text, removed field → its column stays.
  */
-function syncFieldCols_(sh, fields) {
+function syncFieldCols_(sh, fields, staleKeys) {
   return withLock_(() => {
     const map = clone_(fieldColsMap_());
+    (staleKeys || []).forEach((k) => { delete map[k]; });   // header moved: find the column again by its text
     const specs = fieldColumns_(fields);
     const lastCol = Math.max(sh.getLastColumn(), REPORT_FIXED_COLS_);
     const header = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(cellStr_);
     const usedCols = {};
+    const current = toSet_(specs.map((sp) => sp.key));
+    const fieldIds = toSet_((fields || []).map((f) => f.id));
     Object.keys(map).forEach((k) => {
-      if (map[k] > REPORT_FIXED_COLS_ && !usedCols[map[k]]) usedCols[map[k]] = k;
+      if (map[k] > REPORT_FIXED_COLS_ && map[k] <= lastCol && !usedCols[map[k]]) usedCols[map[k]] = k;
       else delete map[k];
     });
+    // A column still mapped to a field that no longer exists may be re-used by a NEW key with the
+    // same header (a deleted question added again keeps writing under its old heading).
+    const retiredCol = (c) => {
+      const k = usedCols[c];
+      return !!k && !current[k] && !fieldIds[String(k).split('.')[0]];
+    };
     let next = lastCol;
     Object.keys(usedCols).forEach((c) => { next = Math.max(next, Number(c)); });
     next += 1;
@@ -2053,7 +2368,11 @@ function syncFieldCols_(sh, fields) {
       if (!(col > REPORT_FIXED_COLS_)) {
         // Re-use an orphan column carrying the same header (copies, resets, lost mapping).
         for (let c = REPORT_FIXED_COLS_ + 1; c <= lastCol; c++) {
-          if (!usedCols[c] && header[c - 1] === sp.header) { col = c; break; }
+          if ((!usedCols[c] || retiredCol(c)) && cleanText_(header[c - 1]) === cleanText_(sp.header)) {
+            if (usedCols[c]) delete map[usedCols[c]];
+            col = c;
+            break;
+          }
         }
         if (!(col > REPORT_FIXED_COLS_)) { col = next++; newCols.push({ col: col, num: sp.num }); }
         map[sp.key] = col;
@@ -2076,6 +2395,7 @@ function syncFieldCols_(sh, fields) {
       const width = Math.max(header.length, Math.max.apply(null, changedCols));
       const row = [];
       for (let c = 1; c <= width; c++) row.push(headerChanges[c] !== undefined ? headerChanges[c] : (header[c - 1] || ''));
+      ensureCols_(sh, width);
       writeBlock_(sh, 1, 1, [row]);
       styleHeader_(sh, width);
     }
@@ -2121,21 +2441,65 @@ function photosFolder_(create) {
   return withLock_(() => {
     const again = tryOpen(cfg_().photosFolderId);
     if (again) return again;
+    // A trashed folder is replaced, but its id is remembered: once restored from the trash, the
+    // evidence photos in it stay viewable in the dashboard (api_photo accepts every known folder).
+    const prev = cfg_().photosFolderId;
+    const oldIds = (Array.isArray(cfg_().photosFolderIdsOld) ? cfg_().photosFolderIdsOld : [])
+      .filter((x) => x && x !== prev);
     const folder = DriveApp.createFolder(PHOTOS_FOLDER_NAME);
-    saveCfg_({ photosFolderId: folder.getId() });
+    saveCfg_({ photosFolderId: folder.getId(), photosFolderIdsOld: prev ? oldIds.concat([prev]).slice(-20) : oldIds });
     return folder;
   });
 }
 
 function photosFolderUrl_() { return driveFolderUrl_(cfg_().photosFolderId); }
 
-/** Does this Drive file belong to the school (name `<date>_<schoolId>_…`, not trashed)? */
+/**
+ * The owner's Google storage ({used, limit} in bytes, cached 6 h) or null. Evidence photos live in
+ * the supervisor's own Drive (15 GB shared with Gmail on free accounts), so the dashboard warns early.
+ */
+function driveStorage_() {
+  try {
+    const hit = cache_().get('storage');
+    if (hit) return JSON.parse(hit);
+    const used = DriveApp.getStorageUsed();
+    const limit = DriveApp.getStorageLimit();
+    const out = isNum_(used) && isNum_(limit) && limit > 0 ? { used: used, limit: limit } : null;
+    if (out) cache_().put('storage', JSON.stringify(out), LIMITS_.counterTtlSec);
+    return out;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Ids of every evidence folder this app created (current first). */
+function photoFolderIds_() {
+  const c = cfg_();
+  return [c.photosFolderId].concat(Array.isArray(c.photosFolderIdsOld) ? c.photosFolderIdsOld : [])
+    .filter((x) => typeof x === 'string' && x);
+}
+
+/**
+ * Is the file inside one of the app's evidence folders? With the full Drive scope getFileById can
+ * reach any file of the owner, so the folder — not only the file name — is what proves it is ours.
+ */
+function inPhotosFolder_(file) {
+  const allowed = toSet_(photoFolderIds_());
+  if (!Object.keys(allowed).length) return false;
+  try {
+    const it = file.getParents();
+    while (it.hasNext()) { if (allowed[it.next().getId()]) return true; }
+  } catch (e) { /* no parents visible */ }
+  return false;
+}
+
+/** Does this Drive file belong to the school (app folder, name `<date>_<schoolId>_…`, not trashed)? */
 function fileBelongsTo_(file, schoolId) {
   try {
     if (file.isTrashed()) return false;
   } catch (e) { /* treat as not trashed */ }
   const name = String(file.getName() || '');
-  return /^\d{4}-\d{2}-\d{2}_/.test(name) && name.indexOf('_' + schoolId + '_') > 0;
+  return /^\d{4}-\d{2}-\d{2}_/.test(name) && name.indexOf('_' + schoolId + '_') > 0 && inPhotosFolder_(file);
 }
 
 /** {id, name, size, mime, file} for a photo uploaded by this school, else null. */
@@ -2167,11 +2531,31 @@ function fileDataUrl_(file) {
   return 'data:' + mime + ';base64,' + Utilities.base64Encode(blob.getBytes());
 }
 
-/** Photo ids referenced by saved reports of a school (optionally excluding one report). */
-function photoRefs_(schoolId, exceptKey) {
-  const entries = reportIndex_().list.filter((e) => e.schoolId === schoolId && e.key !== exceptKey);
+/**
+ * Which of `ids` are referenced by saved reports of a school (optionally excluding one report).
+ * A server-side TextFinder on the answers-JSON column finds the few candidate rows, so a photo
+ * removal never reads the whole sheet under the lock; candidates are then confirmed by parsing.
+ */
+function photoRefs_(schoolId, exceptKey, ids) {
   const refs = {};
-  readRecords_(entries).forEach((r) => { photoIds_(r.answers).forEach((id) => { refs[id] = true; }); });
+  const want = (ids || []).filter((id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(id));
+  if (!want.length) return refs;
+  const sh = sheet_(SH_REPORTS);
+  const last = sh.getLastRow();
+  if (last < 2) return refs;
+  const byRow = {};
+  reportIndex_().list.forEach((e) => { byRow[e.row] = e; });
+  const col = sh.getRange(2, REPORT_FIXED_COLS_, last - 1, 1);
+  const cand = {};
+  want.forEach((id) => {
+    col.createTextFinder(id).matchCase(true).findAll().forEach((cell) => {
+      const e = byRow[cell.getRow()];
+      if (e && e.schoolId === schoolId && e.key !== exceptKey) cand[e.row] = e;
+    });
+  });
+  const wanted = toSet_(want);
+  readRecords_(Object.keys(cand).map((r) => cand[r]))
+    .forEach((r) => { photoIds_(r.answers).forEach((id) => { if (wanted[id]) refs[id] = true; }); });
   return refs;
 }
 
@@ -2180,7 +2564,7 @@ function cleanupPhotos_(schoolId, ids, exceptKey) {
   if (!ids || !ids.length) return;
   try {
     withLock_(() => {
-      const refs = photoRefs_(schoolId, exceptKey);
+      const refs = photoRefs_(schoolId, exceptKey, ids);
       ids.forEach((id) => {
         if (refs[id]) return;
         try {
@@ -2203,10 +2587,13 @@ function cleanupPhotos_(schoolId, ids, exceptKey) {
  * First step of every entry point.
  *  • Copy detection: if cfg.ssId exists and differs from the active spreadsheet,
  *    this is a fresh copy of someone else's file → wipe Script Properties.
+ *    A standalone script (no bound spreadsheet) has no such signal: there a different
+ *    effective user than the stored owner means a copied project → wipe as well (its cfg.ssId
+ *    points at the original owner's spreadsheet, which ss_() would otherwise keep using).
  *  • Records ssId and (web-app / trigger contexts only) the owner's email.
- *  • Lazily creates the data sheets.
+ *  • Lazily creates the data sheets (and, standalone, the data spreadsheet — see ss_()).
  * opts.menu = true for spreadsheet-menu contexts (the clicking user may be an
- * editor, not the owner, so the owner email is never captured there).
+ * editor, not the owner, so the owner email is never captured or compared there).
  */
 function bootstrap_(opts) {
   MEMO_ = {};
@@ -2219,19 +2606,22 @@ function bootstrap_(opts) {
   const activeId = active ? active.getId() : '';
   if (active) MEMO_.ss = active;
 
-  if (stored.ssId && activeId && stored.ssId !== activeId) {
+  let email = '';
+  if (!o.menu) {
+    try { email = String(Session.getEffectiveUser().getEmail() || '').trim().toLowerCase(); } catch (e) { email = ''; }
+  }
+  const copiedBound = !!(stored.ssId && activeId && stored.ssId !== activeId);
+  const copiedStandalone = !active && !!email && !!stored.ownerEmail &&
+    String(stored.ownerEmail).trim().toLowerCase() !== email;
+  if (copiedBound || copiedStandalone) {
     withLock_(() => props_().deleteAllProperties());
     stored = {};
-    MEMO_ = { ss: active };
+    MEMO_ = active ? { ss: active } : {};
   }
 
   const patch = {};
   if (activeId && stored.ssId !== activeId) patch.ssId = activeId;
-  if (!stored.ownerEmail && !o.menu) {
-    let email = '';
-    try { email = Session.getEffectiveUser().getEmail() || ''; } catch (e) { email = ''; }
-    if (email) patch.ownerEmail = String(email).trim().toLowerCase();
-  }
+  if (!stored.ownerEmail && email) patch.ownerEmail = email;
   if (stored.version !== APP_VERSION) patch.version = APP_VERSION;
   if (Object.keys(patch).length) saveCfg_(patch);
 
@@ -2245,11 +2635,29 @@ function publicStatus_() {
     setupDone: !!c.setupDone,
     ownerEmailMasked: maskEmail_(c.ownerEmail),
     supervisorName: c.setupDone ? (c.supervisor.name || '') : '',
-    deployed: !!baseUrl_()
+    deployed: !!baseUrl_(),
+    devMode: devMode_()
   };
 }
 
-/** Web-app entry: ?s=<token> (school form), ?f=all (school picker), otherwise the supervisor page. */
+/**
+ * Saves the deployment URL the first time the supervisor page is opened from a real deployment
+ * ('…/exec'), so links stay right even where getUrl() is unreliable (menu, triggers, '/dev').
+ */
+function captureWebAppUrl_() {
+  try {
+    if (cfg_().webAppUrl) return;
+    const u = cleanWebAppUrl_(serviceUrl_());
+    if (!u) return;
+    withLock_(() => { if (!cfg_().webAppUrl) saveCfg_({ webAppUrl: u }); });
+    MEMO_.baseUrl = undefined;
+  } catch (e) { /* optional */ }
+}
+
+/**
+ * Web-app entry: ?s=<token> (school form; &d=<yyyy-MM-dd> opens a late / correction report of that
+ * day when allowed), ?f=all (school picker), otherwise the supervisor page.
+ */
 function doGet(e) {
   try {
     bootstrap_();
@@ -2258,7 +2666,9 @@ function doGet(e) {
     const base = { appName: APP_NAME, version: APP_VERSION, systemTitle: c.systemTitle };
     if (p.s) {
       const token = cleanToken_(p.s);
-      const form = schoolFormData_(token, null);
+      const d = typeof p.d === 'string' && isIsoDate_(p.d.trim()) ? p.d.trim() : null;
+      let form = schoolFormData_(token, d);
+      if (d && !form.ok && form.code === 'NOT_EDITABLE') form = schoolFormData_(token, null);   // that day is closed → today
       const boot = Object.assign({ page: 'school', mode: 'form' }, base, { token: token, form: form });
       const title = (form.ok && form.school ? form.school.name + ' — ' : '') + c.systemTitle;
       return renderPage_('School', boot, title);
@@ -2267,16 +2677,41 @@ function doGet(e) {
       const boot = Object.assign({ page: 'school', mode: 'picker' }, base, { picker: pickerData_() });
       return renderPage_('School', boot, c.systemTitle);
     }
+    captureWebAppUrl_();
     const boot = Object.assign({ page: 'admin' }, base, { status: publicStatus_() });
     return renderPage_('Admin', boot, c.systemTitle + ' — لوحة المشرف');
   } catch (err) {
     try { console.error((err && err.stack) || String(err)); } catch (ignore) { /* no console */ }
-    return errorPage_();
+    const perm = permMessage_(err);
+    return errorPage_(perm ? 'لا يمكن فتح الصفحة الآن: ' + perm : '');
   }
 }
 
+/**
+ * HTML sources come from the project's .html files — or, in a single-file bundle, from the global
+ * NABD_EMBEDDED_FILES_ map ({ name: html }) that a bundler appends. One helper for every load.
+ */
+function embeddedHtml_(name) {
+  const files = typeof NABD_EMBEDDED_FILES_ !== 'undefined' && NABD_EMBEDDED_FILES_ ? NABD_EMBEDDED_FILES_ : null;
+  if (!files) return null;
+  const n = String(name);
+  if (Object.prototype.hasOwnProperty.call(files, n)) return String(files[n]);
+  if (Object.prototype.hasOwnProperty.call(files, n + '.html')) return String(files[n + '.html']);
+  return null;
+}
+/** An HtmlTemplate for a page (embedded source when bundled, else the project file). */
+function htmlTemplate_(name) {
+  const src = embeddedHtml_(name);
+  return src !== null ? HtmlService.createTemplate(src) : HtmlService.createTemplateFromFile(name);
+}
+/** The raw content of a partial (embedded source when bundled, else the project file). */
+function htmlFile_(name) {
+  const src = embeddedHtml_(name);
+  return src !== null ? src : HtmlService.createHtmlOutputFromFile(name).getContent();
+}
+
 function renderPage_(file, boot, title) {
-  const t = HtmlService.createTemplateFromFile(file);
+  const t = htmlTemplate_(file);
   t.bootJson = safeJson_(boot);
   return t.evaluate()
     .setTitle(String(title).slice(0, 200))
@@ -2284,15 +2719,16 @@ function renderPage_(file, boot, title) {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-function errorPage_() {
+function errorPage_(text) {
+  const body = text ? escHtml_(text)
+    : 'تعذّر فتح الصفحة الآن بسبب خطأ غير متوقع.<br>حدّث الصفحة بعد قليل، وإذا تكرر الأمر تواصل مع المشرف.';
   const html = '<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">' +
     '<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;' +
     'background:#F5F7F8;font-family:Tahoma,"Segoe UI",sans-serif;color:#10222B;padding:16px;box-sizing:border-box}' +
     '.c{max-width:440px;background:#fff;border:1px solid #E2E8EA;border-radius:18px;padding:28px 24px;' +
     'text-align:center;box-shadow:0 4px 16px rgba(16,34,43,.08)}h1{font-size:20px;margin:0 0 8px;color:#084F42}' +
     'p{margin:0;color:#3E5360;line-height:1.8}</style></head><body><div class="c">' +
-    '<h1>' + escHtml_(APP_NAME) + '</h1><p>تعذّر فتح الصفحة الآن بسبب خطأ غير متوقع.<br>' +
-    'حدّث الصفحة بعد قليل، وإذا تكرر الأمر تواصل مع المشرف.</p></div></body></html>';
+    '<h1>' + escHtml_(APP_NAME) + '</h1><p>' + body + '</p></div></body></html>';
   return HtmlService.createHtmlOutput(html)
     .setTitle(APP_NAME)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover')
@@ -2303,7 +2739,7 @@ function errorPage_() {
 function include(name) {
   const n = String(name || '');
   if (!/^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(n)) throw new Error('ملف غير معروف.');
-  return HtmlService.createHtmlOutputFromFile(n).getContent();
+  return htmlFile_(n);
 }
 
 /** Keeps only token characters (also drops punctuation messaging apps glue to links). */
@@ -2341,7 +2777,7 @@ function schoolFormData_(token, date) {
     const fields = fields_();
     const hs = toSet_(holidays_());
     const deadline = c.schedule.deadline;
-    const pastDeadline = now > deadline;
+    const pastDeadline = pastDeadline_(c, today, now, hs);   // the deadline only applies on workdays
     const reviewEnabled = !!c.review.enabled;
     const common = {
       supervisor: { name: c.supervisor.name || '', title: c.supervisor.title || DEFAULT_SUPERVISOR_TITLE },
@@ -2350,6 +2786,7 @@ function schoolFormData_(token, date) {
       today: today,
       now: now,
       deadline: deadline,
+      allowLate: !!c.schedule.allowLate,
       reviewEnabled: reviewEnabled
     };
 
@@ -2363,7 +2800,8 @@ function schoolFormData_(token, date) {
         state: pastDeadline ? 'late' : 'open',
         existing: null,
         canEdit: true,
-        returned: []
+        returned: [],
+        missingDays: []
       });
     }
 
@@ -2373,14 +2811,20 @@ function schoolFormData_(token, date) {
     if (!s.active) return formError_('INACTIVE');
 
     const idx = reportIndex_();
+    const missing = missingDays_(s, c, today, hs, idx);
     let reportDate = today, state, existing = null, canEdit;
     if (date && date !== today) {
-      if (!isIsoDate_(date)) return formError_('NOT_EDITABLE');
+      if (!isIsoDate_(date) || date > today) return formError_('NOT_EDITABLE');
       const rec = findReport_(date, s.id);
-      if (!rec || rec.status !== 'returned') return formError_('NOT_EDITABLE');
+      if (rec && rec.status === 'returned') {
+        state = 'correction';                     // returned for correction: always editable
+        existing = rec;
+      } else if (!rec && missing.indexOf(date) >= 0) {
+        state = 'backfill';                       // a missed workday inside the late-reporting window
+      } else {
+        return formError_('NOT_EDITABLE');
+      }
       reportDate = date;
-      state = 'correction';
-      existing = rec;
       canEdit = true;
     } else {
       existing = findReport_(today, s.id);
@@ -2403,15 +2847,42 @@ function schoolFormData_(token, date) {
       isWorkday: isWorkday_(reportDate, c.schedule.workdays, hs),
       isHoliday: !!hs[reportDate],
       state: state,
-      existing: existing ? reportOut_(existing, fields) : null,
+      existing: existing ? reportOut_(existing, fields, retiredKpis_()) : null,
       canEdit: canEdit,
-      returned: returned
+      returned: returned,
+      missingDays: missing
     });
   } catch (e) {
-    if (e && e.nabdUser) return { ok: false, code: 'ERROR', error: e.message };
-    try { console.error((e && e.stack) || String(e)); } catch (ignore) { /* no console */ }
-    return { ok: false, code: 'ERROR', error: MSG_.UNEXPECTED };
+    return { ok: false, code: 'ERROR', error: schoolErrorText_(e) };
   }
+}
+
+/** Principal-facing text for an error (layout problems are the supervisor's to fix). */
+function schoolErrorText_(e) {
+  if (e && e.nabdLayout) return MSG_.UNAVAILABLE;
+  if (e && e.nabdUser) return e.message;
+  try { console.error((e && e.stack) || String(e)); } catch (ignore) { /* no console */ }
+  return permMessage_(e) || MSG_.UNEXPECTED;
+}
+
+/** Is today's deadline over? Never on non-workdays (holidays, weekends): nothing is due then. */
+function pastDeadline_(c, today, now, hs) {
+  return now > c.schedule.deadline && isWorkday_(today, c.schedule.workdays, hs || toSet_(holidays_()));
+}
+
+/** Late-reporting window size (schedule.backfillDays, 0–7). */
+function backfillDays_(c) {
+  return Math.max(0, Math.min(7, toInt_(c.schedule.backfillDays, 0)));
+}
+
+/**
+ * Past workdays (newest first) the school may still report: inside the last `backfillDays` workdays,
+ * on or after the day it was first due, and with no report yet.
+ */
+function missingDays_(school, c, today, hs, idx) {
+  const first = firstDueDate_(school, c.schedule.deadline);
+  return backfillDates_(today, c.schedule.workdays, hs, backfillDays_(c))
+    .filter((d) => (!first || d >= first) && !idx.byKey[d + '|' + school.id]);
 }
 
 /** School list for the general link (?f=all). Never throws. */
@@ -2425,8 +2896,7 @@ function pickerData_() {
       .sort((a, b) => cmpName_(a.name, b.name));
     return { ok: true, supervisor: { name: c.supervisor.name || '', title: c.supervisor.title || '' }, schools: schools };
   } catch (e) {
-    try { console.error((e && e.stack) || String(e)); } catch (ignore) { /* no console */ }
-    return { ok: false, code: 'ERROR', error: MSG_.UNEXPECTED };
+    return { ok: false, code: 'ERROR', error: schoolErrorText_(e) };
   }
 }
 
@@ -2434,7 +2904,7 @@ function api_schoolForm(schoolToken, date) {
   return run_(() => {
     const d = typeof date === 'string' && date.trim() ? date.trim().slice(0, 10) : null;
     return schoolFormData_(cleanToken_(schoolToken), d);
-  });
+  }, { school: true });
 }
 
 /** General link: exchange (schoolId, 4-digit school code) for the private token. */
@@ -2456,7 +2926,7 @@ function api_resolveSchool(schoolId, pin) {
       fail_(MSG_.PIN_WRONG);
     }
     return { ok: true, token: s.token };
-  });
+  }, { school: true });
 }
 
 /** Saves one evidence photo (already compressed by the browser) to the photos folder. */
@@ -2494,7 +2964,16 @@ function api_uploadPhoto(schoolToken, payload) {
       return photosFolder_(true);
     });
     const fileName = today + '_' + school.id + '_' + randStr_(6, LOWER_ALNUM_) + '.' + PHOTO_MIMES_[mime];
-    const file = folder.createFile(Utilities.newBlob(bytes, mime, fileName));
+    let file;
+    try {
+      file = folder.createFile(Utilities.newBlob(bytes, mime, fileName));
+    } catch (e) {
+      if (/quota|storage|limit|exceed/i.test(String((e && e.message) || e))) {
+        try { console.error('createFile failed: ' + e); } catch (ignore) { /* no console */ }
+        fail_(MSG_.DRIVE_FULL);
+      }
+      throw e;
+    }
     try { file.setDescription(school.name + ' — ' + today); } catch (e) { /* optional */ }
     return {
       ok: true,
@@ -2506,7 +2985,7 @@ function api_uploadPhoto(schoolToken, payload) {
         size: bytes.length
       }
     };
-  });
+  }, { school: true });
 }
 
 /**
@@ -2526,11 +3005,11 @@ function api_discardPhoto(schoolToken, fileId) {
       fail_('لا يمكن حذف هذه الصورة.');
     }
     withLock_(() => {
-      if (photoRefs_(school.id, null)[id]) return;   // still part of a saved report → kept
+      if (photoRefs_(school.id, null, [id])[id]) return;   // still part of a saved report → kept
       try { file.setTrashed(true); } catch (e) { /* best effort */ }
     });
     return { ok: true };
-  });
+  }, { school: true });
 }
 
 /** A photo of this school as a data URL (for thumbnails on the school page). */
@@ -2540,7 +3019,7 @@ function api_schoolPhoto(schoolToken, fileId) {
     const v = verifySchoolPhoto_(typeof fileId === 'string' ? fileId.trim() : '', school.id);
     if (!v) fail_(MSG_.PHOTO_NOT_FOUND);
     return { ok: true, dataUrl: fileDataUrl_(v.file) };
-  });
+  }, { school: true });
 }
 
 /** Submit (or edit / correct) the school's daily report. */
@@ -2564,14 +3043,16 @@ function api_submitReport(schoolToken, payload) {
       fail_('تجاوزت الحد اليومي لمرات الإرسال. تواصل مع المشرف.');
     }
     // Edit rules first (cheap and clearer than a field error); re-checked inside the lock.
+    // A past date is accepted for a report returned for correction, or — with no report yet — for a
+    // missed workday inside the late-reporting window (schedule.backfillDays).
     const checkEditable = (c, old) => {
       if (date !== today) {
-        if (!old || old.status !== 'returned') fail_(MSG_.NOT_EDITABLE);
-        return;
+        if (old && old.status === 'returned') return;
+        if (!old && missingDays_(school, c, today, toSet_(holidays_()), reportIndex_()).indexOf(date) >= 0) return;
+        fail_(MSG_.NOT_EDITABLE);
       }
-      const pastDeadline = nowHM_() > c.schedule.deadline;
       if (!canEditToday_(old, { reviewEnabled: !!c.review.enabled, allowLate: !!c.schedule.allowLate,
-        pastDeadline: pastDeadline })) {
+        pastDeadline: pastDeadline_(c, today, nowHM_()) })) {
         if (old && old.status === 'approved') fail_(MSG_.APPROVED_LOCKED);
         fail_(MSG_.CLOSED);
       }
@@ -2589,12 +3070,13 @@ function api_submitReport(schoolToken, payload) {
       const now = nowHM_();
       const ts = nowTs_();
       const reviewEnabled = !!c.review.enabled;
-      const pastDeadline = now > c.schedule.deadline;
       const old = findReport_(date, school.id);
       checkEditable(c, old);
+      // Late: a missed day sent afterwards, or today's report after the deadline (never on an off day).
+      const late = date !== today || pastDeadline_(c, today, now);
       const rec = old ? Object.assign({}, old) : {
         row: null, key: date + '|' + school.id, date: date, schoolId: school.id, submittedAt: ts,
-        late: date === today && pastDeadline, edits: 0, reviewNote: '', reviewedAt: ''
+        late: late, edits: 0, reviewNote: '', reviewedAt: ''
       };
       if (old) rec.edits = (old.edits || 0) + 1;
       rec.schoolName = school.name;
@@ -2615,9 +3097,9 @@ function api_submitReport(schoolToken, payload) {
     });
 
     cleanupPhotos_(school.id, result.removed, result.rec.date + '|' + school.id);
-    const receipt = Object.assign(reportOut_(result.rec, fields), { schoolName: school.name });
+    const receipt = Object.assign(reportOut_(result.rec, fields, retiredKpis_()), { schoolName: school.name });
     return { ok: true, receipt: receipt };
-  });
+  }, { school: true });
 }
 
 
@@ -2674,7 +3156,8 @@ function api_requestCode() {
   return run_(() => {
     const c = cfg_();
     if (!c.ownerEmail) {
-      fail_('تعذّر معرفة بريد صاحب هذه النسخة. افتح الرابط وأنت مسجّل الدخول بحسابك في Google ثم حاول مرة أخرى.');
+      // Execute-as-me: the owner's address comes from the userinfo.email permission, not the visitor.
+      fail_('تعذّر معرفة بريد صاحب هذه النسخة. ' + MSG_.PERM_MISSING);
     }
     return withLock_(() => {
       const cache = cache_();
@@ -2696,6 +3179,8 @@ function api_requestCode() {
         });
       } catch (e) {
         try { console.error('mail failed: ' + e); } catch (ignore) { /* no console */ }
+        // A skipped «send email» permission is not fixed by waiting: say what to do instead.
+        if (isPermErr_(e) || scopesMissing_()) fail_(MSG_.PERM_MISSING);
         fail_('تعذّر إرسال الرمز إلى بريدك الآن. حاول مرة أخرى بعد قليل.');
       }
       cache.put('otp', JSON.stringify(record), LIMITS_.otpTtlSec);
@@ -2814,6 +3299,7 @@ function api_completeSetup(token, data) {
     if (systemTitle.length > 60) fail_('اسم النظام أطول من 60 حرفًا.');
     if (systemTitle.length < 2) systemTitle = DEFAULT_SYSTEM_TITLE;
     const preset = PRESETS_[data.preset] ? data.preset : 'standard';
+    const webAppUrl = webAppUrlInput_(data.webAppUrl);
     const text = typeof data.schoolsText === 'string' ? data.schoolsText : '';
     if (text.length > 100000) fail_('قائمة المدارس طويلة جدًا.');
     const pre = parseBulkSchools_(text, []);
@@ -2830,7 +3316,10 @@ function api_completeSetup(token, data) {
           students: it.students, teachers: it.teachers, staff: it.staff }));
       });
       appendSchools_(fresh);
-      saveCfg_({ supervisor: supervisor, systemTitle: systemTitle, setupDone: true, setupAt: nowTs_() });
+      const patch = { supervisor: supervisor, systemTitle: systemTitle, setupDone: true, setupAt: nowTs_() };
+      if (webAppUrl) patch.webAppUrl = webAppUrl;
+      saveCfg_(patch);
+      MEMO_.baseUrl = undefined;
       log_('تجهيز النظام', 'النموذج: ' + PRESETS_[preset].label + ' — المدارس: ' + fresh.length);
       return fresh.length;
     });
@@ -2875,13 +3364,15 @@ function api_bootstrap(token) {
       fields: fields_(),
       baseUrl: base,
       generalLink: generalLink_(base),
+      devMode: devMode_(),
       spreadsheetUrl: spreadsheetUrl,
       photosFolderUrl: photosFolderUrl_(),
       today: todayStr_(),
       now: nowHM_(),
       ownerEmail: c.ownerEmail,
       version: APP_VERSION,
-      schoolsCount: readSchools_().filter((s) => s.active).length
+      schoolsCount: readSchools_().filter((s) => s.active).length,
+      storage: driveStorage_()
     };
   });
 }
@@ -2910,12 +3401,13 @@ function dayData_(date) {
   });
 
   const reports = {}, snapshots = {}, histPairs = {};
+  const retired = retiredKpis_();
   readRecords_(dayEntries.concat(histEntries)).forEach((r) => {
     if (r.date === date) {
-      reports[r.schoolId] = reportOut_(r, fields);
+      reports[r.schoolId] = reportOut_(r, fields, retired);
       snapshots[r.schoolId] = r.schoolName;
     } else {
-      const st = deriveReport_(fields, r.answers).attendance.students;
+      const st = deriveReport_(fields, r.answers, retired).attendance.students;
       if (st && st.absencePct !== null) {
         (histPairs[r.schoolId] = histPairs[r.schoolId] || []).push({ date: r.date, pct: st.absencePct });
       }
@@ -2931,10 +3423,13 @@ function dayData_(date) {
 
   const nameById = {};
   schools.forEach((s) => { nameById[s.id] = s.name; });
+  const byNewest = (a, b) => (a.date < b.date ? 1 : (a.date > b.date ? -1 : cmpName_(a.schoolName, b.schoolName)));
+  const ref = (e) => ({ date: e.date, schoolId: e.schoolId, schoolName: nameById[e.schoolId] || e.schoolName });
   const pendingOther = idx.list.filter((e) => e.status === 'pending' && e.date !== date)
-    .sort((a, b) => (a.date < b.date ? 1 : (a.date > b.date ? -1 : cmpName_(a.schoolName, b.schoolName))))
-    .slice(0, 50)
-    .map((e) => ({ date: e.date, schoolId: e.schoolId, schoolName: nameById[e.schoolId] || e.schoolName }));
+    .sort(byNewest).slice(0, 50).map(ref);
+  // Corrections still owed by schools (returned on another day) — they wait on the school, not on you.
+  const returnedOther = idx.list.filter((e) => e.status === 'returned' && e.date !== date)
+    .sort(byNewest).slice(0, 50).map(ref);
 
   const modeField = kpiField_(fields, 'mode');
   return buildDay_({
@@ -2946,12 +3441,15 @@ function dayData_(date) {
     holidays: holidays,
     thresholds: c.alerts,
     reviewEnabled: !!c.review.enabled,
+    allowLate: !!c.schedule.allowLate,
+    backfillDays: backfillDays_(c),
     schools: schools,
     reports: reports,
     snapshots: snapshots,
     history: history,
     datesBySchool: datesBySchool,
     pendingOther: pendingOther,
+    returnedOther: returnedOther,
     modeOptions: modeField ? modeField.options : [],
     baseUrl: baseUrl_()
   });
@@ -3003,7 +3501,7 @@ function api_review(token, date, schoolId, action, note) {
       }
       return r;
     });
-    return { ok: true, report: reportOut_(rec, fields_()) };
+    return { ok: true, report: reportOut_(rec, fields_(), retiredKpis_()) };
   });
 }
 
@@ -3043,7 +3541,7 @@ function api_report(token, date, schoolId) {
         students: s.students, teachers: s.teachers, staff: s.staff, active: s.active }
       : { id: sid, name: rec.schoolName || 'مدرسة محذوفة', ministryNo: '', stage: '', principal: '', phone: '',
         students: 0, teachers: 0, staff: 0, active: false };
-    return { ok: true, school: school, report: reportOut_(rec, fields), supervisor: c.supervisor,
+    return { ok: true, school: school, report: reportOut_(rec, fields, retiredKpis_()), supervisor: c.supervisor,
       systemTitle: c.systemTitle, fields: fields };
   });
 }
@@ -3055,16 +3553,10 @@ function api_photo(token, fileId) {
     requireSetup_();
     const id = typeof fileId === 'string' ? fileId.trim() : '';
     if (!/^[A-Za-z0-9_-]{1,200}$/.test(id)) fail_(MSG_.PHOTO_NOT_FOUND);
-    const folderId = cfg_().photosFolderId;
-    if (!folderId) fail_(MSG_.PHOTO_NOT_FOUND);
+    if (!photoFolderIds_().length) fail_(MSG_.PHOTO_NOT_FOUND);
     let file;
     try { file = DriveApp.getFileById(id); } catch (e) { fail_(MSG_.PHOTO_NOT_FOUND); }
-    let inFolder = false;
-    try {
-      const it = file.getParents();
-      while (it.hasNext()) { if (it.next().getId() === folderId) { inFolder = true; break; } }
-    } catch (e) { inFolder = false; }
-    if (!inFolder) fail_(MSG_.PHOTO_NOT_FOUND);
+    if (!inPhotosFolder_(file)) fail_(MSG_.PHOTO_NOT_FOUND);   // current folder or one replaced earlier
     try { if (file.isTrashed()) fail_('هذه الصورة محذوفة (موجودة في سلة المحذوفات في Drive).'); } catch (e) {
       if (e && e.nabdUser) throw e;
     }
@@ -3082,20 +3574,25 @@ function api_range(token, from, to) {
     if (diffDays_(f, t) > LIMITS_.rangeMaxDays) fail_('أقصى مدة للإحصاءات ' + LIMITS_.rangeMaxDays + ' يومًا.');
     const c = cfg_();
     const fields = fields_();
+    const retired = retiredKpis_();
     const entries = reportIndex_().list.filter((e) => e.date >= f && e.date <= t);
     const recs = readRecords_(entries).map((r) => ({
       date: r.date, schoolId: r.schoolId, schoolName: r.schoolName, status: r.status, late: r.late,
-      derived: deriveReport_(fields, r.answers)
+      derived: deriveReport_(fields, r.answers, retired)
     }));
     const modeField = kpiField_(fields, 'mode');
     return buildRange_({
-      from: f, to: t, today: todayStr_(), workdays: c.schedule.workdays, holidays: holidays_(),
+      from: f, to: t, today: todayStr_(), now: nowHM_(), deadline: c.schedule.deadline,
+      workdays: c.schedule.workdays, holidays: holidays_(),
       schools: readSchools_(), recs: recs, modeOptions: modeField ? modeField.options : []
     });
   });
 }
 
-/** Deletes a report so the school can submit that day from scratch (photos stay in Drive). */
+/**
+ * Deletes a report (photos stay in Drive). The school can send that day again only while it is still
+ * open to it: today (unless closed after the deadline) or a missed day inside the late-reporting window.
+ */
 function api_deleteReport(token, date, schoolId) {
   return run_(() => {
     requireAuth_(token);
@@ -3145,7 +3642,8 @@ function api_schools(token) {
     requireAuth_(token);
     requireSetup_();
     const base = baseUrl_();
-    return { baseUrl: base, generalLink: generalLink_(base), schools: readSchools_().map((s) => adminSchool_(s, base)) };
+    return { baseUrl: base, generalLink: generalLink_(base), devMode: devMode_(),
+      schools: readSchools_().map((s) => adminSchool_(s, base)) };
   });
 }
 
@@ -3324,13 +3822,33 @@ function api_getSettings(token) {
       returnTemplate: c.returnTemplate,
       baseUrl: base,
       generalLink: generalLink_(base),
+      webAppUrl: cleanWebAppUrl_(c.webAppUrl),
+      detectedUrl: cleanWebAppUrl_(serviceUrl_()),
+      devMode: devMode_(),
       spreadsheetUrl: spreadsheetUrl,
       photosFolderUrl: photosFolderUrl_(),
+      storage: driveStorage_(),
       ownerEmail: c.ownerEmail,
       version: APP_VERSION,
       presets: presetList_()
     };
   });
+}
+
+/** The web-app URL typed by the supervisor: '' (empty) or a clean '…/exec' URL; anything else fails. */
+function webAppUrlInput_(v) {
+  if (v === undefined || v === null) return '';
+  if (typeof v !== 'string') fail_('رابط تطبيق الويب غير صالح.');
+  const raw = cleanText_(v);
+  if (!raw) return '';
+  const u = cleanWebAppUrl_(raw);
+  if (u) return u;
+  if (/\/dev(?:[?#].*)?$/.test(raw)) {
+    fail_('هذا رابط النسخة التجريبية (⁦/dev⁩) ولا يعمل لدى المدارس. انسخ «رابط تطبيق الويب» من «نشر» ← ' +
+      '«إدارة عمليات النشر» — وهو ينتهي بـ ⁦/exec⁩.');
+  }
+  fail_('رابط تطبيق الويب غير صحيح. يبدأ بـ https://script.google.com/ وينتهي بـ ⁦/exec⁩ — انسخه من «نشر» ← ' +
+    '«إدارة عمليات النشر».');
 }
 
 function intInRange_(v, min, max, msg) {
@@ -3382,6 +3900,9 @@ function validateSettings_(s, cur) {
       out.workdays = days.sort((a, b) => a - b);
     }
     if ('allowLate' in x) out.allowLate = boolSetting_(x, 'allowLate', 'قيمة «السماح بالإرسال المتأخر» غير صالحة.');
+    if ('backfillDays' in x) {
+      out.backfillDays = intInRange_(x.backfillDays, 0, 7, 'عدد أيام إرسال التقارير الفائتة يجب أن يكون من 0 إلى 7.');
+    }
     patch.schedule = out;
     labels.push('مواعيد التسليم');
   }
@@ -3392,6 +3913,10 @@ function validateSettings_(s, cur) {
   if ('links' in s) {
     patch.links = { generalEnabled: boolSetting_(s.links, 'generalEnabled', 'قيمة «الرابط العام» غير صالحة.') };
     labels.push('طرق الإرسال');
+  }
+  if ('webAppUrl' in s) {
+    patch.webAppUrl = webAppUrlInput_(s.webAppUrl);
+    if (labels.indexOf('طرق الإرسال') < 0) labels.push('رابط تطبيق الويب');
   }
   if ('alerts' in s) {
     const x = s.alerts;
@@ -3465,6 +3990,7 @@ function api_saveSettings(token, s) {
         }
       }
       if (Object.keys(v.patch).length) saveCfg_(v.patch);
+      if ('webAppUrl' in v.patch) MEMO_.baseUrl = undefined;
       if (v.holidays) { setBigProp_('holidays', JSON.stringify(v.holidays)); MEMO_.holidays = v.holidays; }
       if (v.labels.length) log_('حفظ الإعدادات', v.labels.join('، '));
     });
@@ -3565,7 +4091,11 @@ function digestHtml_(day, c, link) {
     kpi('تفعيل الحصص', fmtPct_(t.lessons.activationPct), actColor) + '</tr></table>';
 
   const missing = day.rows.filter((r) => r.flags.indexOf('missing') >= 0).map((r) => r.school.name);
-  body += '<h3 style="margin:18px 0 6px;font-size:16px;color:#084F42;">لم تُرسل بعد (' + missing.length + ')</h3>';
+  // The trigger fires within ±15 min of the chosen time: say so when it ran before the deadline.
+  const early = day.isToday && day.isWorkday && day.now <= day.deadline;
+  body += '<h3 style="margin:18px 0 6px;font-size:16px;color:#084F42;">لم تُرسل بعد (' + missing.length + ')' +
+    (early && missing.length ? '<span style="font-size:13px;font-weight:normal;color:#6B7C86;"> — الموعد النهائي ' +
+      escHtml_(fmtTime12_(day.deadline)) + ' لم يحن بعد</span>' : '') + '</h3>';
   body += missing.length
     ? '<ul style="margin:0;padding:0 18px 0 0;color:#3E5360;">' +
       missing.slice(0, 40).map((n) => '<li style="margin:2px 0;">' + escHtml_(n) + '</li>').join('') +
@@ -3608,23 +4138,30 @@ function digestHtml_(day, c, link) {
 function digestText_(day) {
   const t = day.totals;
   const missing = day.rows.filter((r) => r.flags.indexOf('missing') >= 0).map((r) => '- ' + r.school.name);
+  const early = day.isToday && day.isWorkday && day.now <= day.deadline;
   return 'ملخص ' + dateLabelAr_(day.date) + '\n' +
     'التسليم: ' + t.submitted + ' من ' + t.schools + '\n' +
     'بانتظار المراجعة: ' + (t.pending + (day.pendingOther || []).length) + '\n' +
     'غياب الطلاب: ' + fmtPct_(t.students.absencePct) + '\n' +
-    (missing.length ? 'لم تُرسل بعد:\n' + missing.join('\n') : 'أرسلت جميع المدارس تقاريرها.');
+    (missing.length ? 'لم تُرسل بعد' + (early ? ' (قبل الموعد النهائي ' + fmtTime12_(day.deadline) + ')' : '') + ':\n' +
+      missing.join('\n') : 'أرسلت جميع المدارس تقاريرها.');
 }
 
-/** Time-driven trigger: emails the owner a summary of today (workdays only). */
-function dailyDigest() {
+/**
+ * Time-driven trigger: emails the owner a summary of today (workdays only).
+ * Only a genuine run of this project's own trigger may send: google.script.run can reach this
+ * global from any page, and an early anonymous call would otherwise claim (and suppress) the day.
+ */
+function dailyDigest(e) {
   try {
+    const uid = e && e.triggerUid ? String(e.triggerUid) : '';
+    if (!uid || !ScriptApp.getProjectTriggers().some((t) => String(t.getUniqueId()) === uid)) return;
     bootstrap_({ menu: true });
     const c = cfg_();
     if (!c.setupDone || !c.digest.enabled || !c.ownerEmail) return;
     const today = todayStr_();
     if (!isWorkday_(today, c.schedule.workdays, toSet_(holidays_()))) return;
-    // At most one digest per day: this global is also reachable through
-    // google.script.run, so repeated calls must never flood the owner's inbox.
+    // At most one digest per day (guards against duplicate trigger runs).
     const claimed = withLock_(() => {
       if (props_().getProperty('digestSent') === today) return false;
       props_().setProperty('digestSent', today);
@@ -3637,7 +4174,7 @@ function dailyDigest() {
       MailApp.sendEmail({
         to: c.ownerEmail,
         subject: 'ملخص اليوم: التسليم ' + t.submitted + ' من ' + t.schools + ' — ' + c.systemTitle,
-        htmlBody: digestHtml_(day, c, baseUrl_()),
+        htmlBody: digestHtml_(day, c, baseUrlStored_()),
         body: digestText_(day),
         name: APP_NAME
       });
@@ -3689,10 +4226,17 @@ function guideListHtml_() {
     '<p class="note">🔒 ' + escHtml_(PRIVACY_NOTE_) + '.</p>';
 }
 
+/** Asks Google for any permission the owner skipped (granular consent) before a menu action runs. */
+function requireAllScopes_() {
+  if (typeof ScriptApp.requireAllScopes === 'function') ScriptApp.requireAllScopes(ScriptApp.AuthMode.FULL);
+}
+
 function menuShowLink() {
+  requireAllScopes_();
   try { bootstrap_({ menu: true }); } catch (e) { /* show the dialog anyway */ }
   const ui = SpreadsheetApp.getUi();
-  const url = baseUrl_();
+  let url = null;
+  try { url = baseUrlStored_(); } catch (e) { url = null; }   // never getUrl() here: it cannot know the deployment
   let html, title, h;
   if (url) {
     title = 'رابط لوحة التحكم';
@@ -3705,14 +4249,17 @@ function menuShowLink() {
       '<p><a class="btn" href="' + escHtml_(url) + '" target="_blank" rel="noopener">فتح لوحة التحكم</a></p>' +
       '<p class="muted">روابط المدارس تجدها داخل اللوحة في قسم «المدارس». لا ترسل هذا الرابط للمدارس.</p>');
   } else {
-    title = 'لم يُنشر التطبيق بعد';
-    h = 520;
-    html = dialogHtml_('<p>لتحصل على رابط لوحة التحكم انشر البرنامج مرة واحدة بهذه الخطوات:</p>' + guideListHtml_());
+    title = 'رابط لوحة التحكم غير محفوظ بعد';
+    h = 560;
+    html = dialogHtml_('<p>لم يُحفظ رابط لوحة التحكم بعد. إن كنت نشرت البرنامج فافتح «رابط تطبيق الويب» ' +
+      '(المنتهي بـ ⁦/exec⁩) مرة واحدة ليُحفظ تلقائيًا. وإن لم تنشره بعد فانشره مرة واحدة بهذه الخطوات:</p>' +
+      guideListHtml_());
   }
   ui.showModalDialog(HtmlService.createHtmlOutput(html).setWidth(560).setHeight(h), title);
 }
 
 function menuShowGuide() {
+  requireAllScopes_();
   const ui = SpreadsheetApp.getUi();
   const html = dialogHtml_('<h2>خطوات التشغيل (مرة واحدة فقط)</h2>' + guideListHtml_());
   ui.showModalDialog(HtmlService.createHtmlOutput(html).setWidth(600).setHeight(560), '📖 خطوات التشغيل');

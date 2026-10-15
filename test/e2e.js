@@ -5,6 +5,7 @@
  *   NODE_PATH=/opt/node-tools/node_modules node --test --test-name-pattern="general link" test/e2e.js
  *   E2E_HEADED=1 E2E_SLOWMO=200 …           (watch it)
  *   E2E_SHOTS=0 …                           (skip writing docs/screenshots)
+ *   E2E_SHOTS=all …                         (write every capture + the printed PDF, not only DOC_SHOTS)
  *
  * The UI is driven through visible Arabic text, roles and the class vocabulary of spec §7.1.
  * EVERY selector and UI string lives in the UI / T objects right below — adapt them there only.
@@ -25,7 +26,20 @@ const { startServer } = require('./server.js');
 
 const SRC = path.resolve(process.env.NABD_SRC || path.join(__dirname, '..', 'src'));
 const SHOTS_DIR = path.join(__dirname, '..', 'docs', 'screenshots');
-const WRITE_SHOTS = process.env.E2E_SHOTS !== '0';
+// docs/screenshots holds only the curated set the README and the guides use (DOC_SHOTS). A default run rewrites
+// exactly those; E2E_SHOTS=all also writes every other capture (and admin-print-day.pdf) for a visual review.
+const SHOTS_MODE = process.env.E2E_SHOTS === '0' ? 'none' : process.env.E2E_SHOTS === 'all' ? 'all' : 'docs';
+const WRITE_SHOTS = SHOTS_MODE !== 'none';
+const DOC_SHOTS = new Set([
+  // desktop
+  'admin-setup-welcome-desktop', 'admin-today-desktop', 'admin-report-modal-desktop', 'admin-return-notice-desktop',
+  'admin-schools-desktop', 'admin-stats-desktop', 'admin-print-day-desktop', 'admin-form-builder-desktop',
+  'admin-settings-desktop',
+  // mobile
+  'admin-login-mobile', 'admin-today-mobile', 'admin-report-details-mobile', 'admin-send-links-mobile',
+  'school-picker-mobile', 'school-form-mobile', 'school-receipt-mobile',
+  'school-late-mobile', 'school-correction-banner-mobile', 'school-backfill-mobile'
+]);
 const CLOCK0 = '2026-10-14T07:30';          // Wednesday, before the 09:00 deadline (Asia/Riyadh wall time)
 const OWNER = 'supervisor@gmail.com';
 const MOBILE = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true };
@@ -359,7 +373,7 @@ async function idle(page) {
 }
 async function goto(page, query) { await page.goto(srv.url + (query ? '?' + query : '')); await idle(page); }
 async function shot(page, name, o = {}) {
-  if (!WRITE_SHOTS) return;
+  if (!WRITE_SHOTS || (SHOTS_MODE === 'docs' && !DOC_SHOTS.has(name))) return;
   await idle(page).catch(() => {});
   await page.evaluate(() => document.fonts && document.fonts.ready).catch(() => {});
   // Let smooth scrolling settle (a capture mid-scroll shows un-rasterised blank tiles).
@@ -769,7 +783,7 @@ describe('e2e', () => {
     await page.emulateMedia({ media: 'print' });
     assert.ok(await page.evaluate(() => document.body.classList.contains('is-printing-doc')), 'print mode prints only the open report');
     await shot(page, 'admin-print-day-printed', { fullPage: true });
-    if (WRITE_SHOTS) await page.pdf({ path: path.join(SHOTS_DIR, 'admin-print-day.pdf'), format: 'A4', printBackground: true, preferCSSPageSize: true });
+    if (SHOTS_MODE === 'all') await page.pdf({ path: path.join(SHOTS_DIR, 'admin-print-day.pdf'), format: 'A4', printBackground: true, preferCSSPageSize: true });
     await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
     await page.emulateMedia({ media: 'screen' });
     await closeClean(h);
@@ -1326,6 +1340,249 @@ describe('e2e', () => {
     await UI.nav(page, T.nav.settings).click();
     await idle(page);
     await shot(page, 'admin-settings-mobile');
+    await closeClean(h);
+  });
+
+  /* ---------------------------------------------------------------- hardening & late reports */
+  const riyadh = (iso) => Date.parse(iso + ':00+03:00');   // wall time in Asia/Riyadh → epoch ms
+
+  scenario('school: a missed workday is sent late from «لم ترسل تقرير يوم سابق؟» and shows on that day', async () => {
+    await setClock('2026-10-11T07:00');
+    const { token, schools } = await seed.ready();
+    await setClock('2026-10-14T08:00');
+    const h = await open('mobile');
+    const { page } = h;
+    await goto(page, 's=' + schools[0].token);
+    const toggle = page.locator('.sc-bf__toggle');
+    await toggle.waitFor();
+    assert.match(await toggle.textContent(), /لم ترسل تقرير يوم سابق؟/);
+    await toggle.click();
+    const days = page.locator('.sc-bf__day');
+    assert.equal(await days.count(), 2, 'the last two workdays (Tue 13, Mon 12)');
+    assert.match(await days.first().textContent(), /الثلاثاء/);
+    assert.match(await days.first().textContent(), /13 أكتوبر/);
+    await shot(page, 'school-backfill-mobile');
+    await days.first().click();
+    await idle(page);
+    await page.locator('#sc-bf-note').filter({ hasText: 'تقرير يوم الثلاثاء' }).waitFor();
+    await page.locator('.sc-date__day').filter({ hasText: 'الثلاثاء' }).waitFor();
+    await fillSchoolForm(page, {});
+    await UI.button(page, /^إرسال تقرير يوم الثلاثاء$/).waitFor();
+    await shot(page, 'school-backfill-form-mobile');
+    await UI.button(page, /^إرسال تقرير يوم الثلاثاء$/).click();
+    await idle(page);
+    await UI.text(page, T.sentPending).waitFor();
+    await UI.text(page, T.lateBadge).waitFor();
+    await UI.button(page, /العودة إلى تقرير اليوم/).click();
+    await idle(page);
+    await page.locator('.sc-date__day').filter({ hasText: 'الأربعاء' }).waitFor();
+    await page.locator('.sc-bf__toggle').filter({ hasText: '1' }).waitFor();
+    const day = await rpc('api_day', token, '2026-10-13');
+    const row = day.rows.find((r) => r.school.id === schools[0].id);
+    assert.ok(row.report && row.report.late, 'the report is filed on Tuesday, marked late');
+    assert.equal((await rpc('api_day', token, '2026-10-14')).rows.find((r) => r.school.id === schools[0].id).report, null, 'today untouched');
+    await closeClean(h);
+  });
+
+  scenario('school tab left open overnight: next morning it loads today\'s form instead of filing yesterday\'s answers', async () => {
+    const { token, schools } = await seed.ready();
+    const h = await open('mobile');
+    const { page } = h;
+    await goto(page, 's=' + schools[0].token);
+    await fillSchoolForm(page, {});
+    await UI.button(page, T.submit).click();
+    await idle(page);
+    await UI.text(page, T.sentPending).waitFor();
+    // Thursday 07:30 — the tab was never reloaded
+    await setClock('2026-10-15T07:30');
+    await page.clock.setSystemTime(riyadh('2026-10-15T07:30'));
+    await UI.button(page, T.editReport).click();
+    await idle(page);
+    await UI.text(page, 'بدأ يوم جديد').waitFor();
+    await page.locator('.sc-date__day').filter({ hasText: 'الخميس' }).waitFor();
+    await UI.button(page, T.submit).waitFor();
+    const wed = (await rpc('api_report', token, '2026-10-14', schools[0].id)).report;
+    assert.equal(wed.edits, 0, 'yesterday\'s report is untouched');
+    assert.equal((await rpc('api_day', token, '2026-10-15')).totals.submitted, 0, 'nothing was filed for today');
+    await closeClean(h);
+  });
+
+  scenario('a form filled across midnight is kept and offered as the missed day', async () => {
+    const { token, schools } = await seed.ready();
+    await setClock('2026-10-14T23:40');
+    const h = await open('mobile');
+    const { page } = h;
+    await goto(page, 's=' + schools[1].token);
+    await fillSchoolForm(page, { note: 'كُتب قبل منتصف الليل' });
+    await page.waitForTimeout(600);   // the draft is saved (debounced)
+    await setClock('2026-10-15T00:10');
+    await page.clock.setSystemTime(riyadh('2026-10-15T00:10'));
+    await UI.button(page, T.submit).click();
+    await idle(page);
+    await UI.text(page, 'بدأ يوم جديد').waitFor();
+    await page.locator('.sc-date__day').filter({ hasText: 'الخميس' }).waitFor();
+    assert.equal((await rpc('api_day', token, '2026-10-15')).totals.submitted, 0, 'Wednesday\'s answers were not filed as Thursday');
+    await page.locator('.sc-bf__day').filter({ hasText: 'الأربعاء' }).click();
+    await idle(page);
+    assert.equal(await UI.input(page, T.note).inputValue(), 'كُتب قبل منتصف الليل', 'the draft of that day is restored');
+    await UI.button(page, /^إرسال تقرير يوم الأربعاء$/).click();
+    await idle(page);
+    await UI.text(page, T.sentPending).waitFor();
+    const rep = (await rpc('api_report', token, '2026-10-14', schools[1].id)).report;
+    assert.equal(rep.late, true);
+    await closeClean(h);
+  });
+
+  scenario('late submissions off: a form left open past the deadline does not send and keeps the draft', async () => {
+    const { token, schools } = await seed.ready();
+    await rpc('api_saveSettings', token, { schedule: { allowLate: false } });
+    await setClock('2026-10-14T08:58');
+    const h = await open('mobile');
+    const { page } = h;
+    await goto(page, 's=' + schools[0].token);
+    await fillSchoolForm(page, {});
+    await page.waitForTimeout(600);
+    await setClock('2026-10-14T09:02');
+    await page.clock.setSystemTime(riyadh('2026-10-14T09:02'));
+    await UI.button(page, T.submit).click();
+    await UI.text(page, T.closedTitle).waitFor();
+    assert.equal((await rpc('api_schoolForm', schools[0].token)).existing, null);
+    const draft = await page.evaluate((k) => localStorage.getItem(k), 'nabd:draft:' + schools[0].token + ':2026-10-14');
+    assert.ok(draft, 'the draft is kept on the device');
+    await closeClean(h);
+  });
+
+  scenario('dashboard left open past midnight moves to the new day on refresh', async () => {
+    const { token, schools, fields } = await seed.ready();
+    await setClock('2026-10-14T23:50');
+    const h = await open('desktop', { token });
+    const { page } = h;
+    await goto(page);
+    await page.locator('.ad-datenav__day').filter({ hasText: 'الأربعاء' }).waitFor();
+    await setClock('2026-10-15T08:30');
+    await page.clock.setSystemTime(riyadh('2026-10-15T08:30'));
+    await seed.submit(fields, schools[0]);
+    await page.getByRole('button', { name: 'تحديث الآن' }).click();
+    await idle(page);
+    await page.locator('.ad-datenav__day').filter({ hasText: 'الخميس' }).waitFor();
+    await page.locator('.ad-today-badge').waitFor();
+    assert.match(await UI.kpi(page, T.kpiSubmission).textContent(), /1\s*من\s*3/);
+    await page.getByRole('button', { name: 'الانتقال إلى تاريخ' }).click();
+    assert.equal(await page.locator('#pick-date').getAttribute('max'), '2026-10-15');
+    await page.keyboard.press('Escape');
+    await closeClean(h);
+  });
+
+  scenario('past days: reminders only while the school may still send; deleting a report says whether it can be resent', async () => {
+    await setClock('2026-10-11T07:00');
+    const { token, schools, fields } = await seed.ready();
+    await setClock('2026-10-11T08:00');
+    await seed.submit(fields, schools[2]);
+    await setClock('2026-10-14T08:00');   // late window: Tue 13, Mon 12
+    const h = await open('desktop', { token });
+    const { page } = h;
+    const goDay = async (iso) => {
+      await page.getByRole('button', { name: 'الانتقال إلى تاريخ' }).click();
+      await page.locator('#pick-date').fill(iso);
+      await UI.button(UI.modal(page), /عرض اليوم/).click();
+      await idle(page);
+    };
+    await goto(page);
+    await goDay('2026-10-12');
+    const miss = page.locator('.ad-missing');
+    await miss.getByRole('button', { name: /تذكير/ }).first().waitFor();
+    const req = h.ctx.waitForEvent('request', (r) => /wa\.me/.test(r.url()));
+    await miss.getByRole('button', { name: /تذكير/ }).first().click();
+    const url = decodeURIComponent((await req).url());
+    assert.ok(url.includes('&d=2026-10-12'), 'the reminder opens that day: ' + url);
+    await goDay('2026-10-11');
+    await page.locator('.ad-missing').filter({ hasText: 'مضى هذا اليوم' }).waitFor();
+    assert.equal(await page.locator('.ad-missing').getByRole('button', { name: /تذكير/ }).count(), 0, 'no reminders for a closed day');
+    assert.equal(await page.getByRole('button', { name: /نسخ رسالة تذكير عامة/ }).count(), 0);
+    await UI.reportItem(page, SCHOOLS[2].name).click();
+    await UI.button(UI.modal(page), T.deleteReport).click();
+    await UI.text(page, 'لن تتمكن المدرسة من إرساله لهذا اليوم مرة أخرى').waitFor();
+    await page.keyboard.press('Escape');
+    await closeClean(h);
+  });
+
+  scenario('phone: tapping the «بانتظار المراجعة» number jumps to the pending reports', async () => {
+    const { token, schools, fields } = await seed.ready();
+    await seed.submit(fields, schools[2]);
+    const h = await open('mobile', { token });
+    const { page } = h;
+    await goto(page);
+    await page.locator('[data-action="show-pending"]').click();
+    await page.waitForTimeout(900);
+    assert.match(await page.locator('#td-filter button.is-active').textContent(), /بانتظار المراجعة/);
+    const card = page.locator('.ad-report-card').filter({ visible: true }).first();
+    assert.equal(await card.getAttribute('data-status'), 'pending');
+    const box = await card.boundingBox();
+    assert.ok(box && box.y >= 0 && box.y < 844, 'the pending report is on screen: y=' + (box && box.y));
+    await page.locator('#td-filter button[data-f="all"]').click();
+    assert.equal(await page.locator('.ad-report-card').filter({ visible: true }).first().getAttribute('data-status'), 'pending', 'under «الكل» the missing schools (listed above) come last');
+    await closeClean(h);
+  });
+
+  scenario('phone layout: the receipt fits a 360px screen; frequently tapped controls meet the tap floor', async () => {
+    const { token, schools, fields } = await seed.ready();
+    await seed.submit(fields, schools[0], { att: { students: { present: 255, absent: 45 } } });
+    const hs = await open('mobile');
+    await hs.page.setViewportSize({ width: 360, height: 800 });
+    await goto(hs.page, 's=' + schools[0].token);
+    await UI.text(hs.page, T.sentPending).waitFor();
+    const clipped = await hs.page.evaluate(() => {
+      const card = document.querySelector('.sc-receipt').getBoundingClientRect();
+      const out = [];
+      document.querySelectorAll('.sc-receipt__body *').forEach((el) => {
+        const wrap = el.closest('.table-wrap');
+        if (wrap && wrap !== el) return;   // a table may scroll inside its wrapper
+        const b = el.getBoundingClientRect();
+        if (b.width && (b.left < card.left - 0.5 || b.right > card.right + 0.5)) out.push((el.className || el.tagName) + ': ' + (el.textContent || '').trim().slice(0, 24));
+      });
+      return out;
+    });
+    assert.deepEqual(clipped, [], 'nothing in the receipt is cut off at 360px');
+    await closeClean(hs);
+    const h = await open('mobile', { token });
+    await goto(h.page);
+    const alertBtn = h.page.locator('.ad-alert__btn').filter({ visible: true }).first();
+    await alertBtn.waitFor();
+    assert.ok((await alertBtn.boundingBox()).height >= 40, 'alert action ≥ 40px on touch screens');
+    assert.ok((await h.page.locator('.ad-refresh').filter({ visible: true }).first().boundingBox()).height >= 40, 'refresh ≥ 40px');
+    await closeClean(h);
+  });
+
+  scenario('opened from the test deployment (/dev): the wizard asks for the /exec URL and every link uses it', async () => {
+    const EXEC = 'https://script.google.com/macros/s/AKfycbRealDeployment/exec';
+    await api('__reset', { clock: CLOCK0, scriptUrl: 'https://script.google.com/macros/s/HEADDEV/dev' });
+    const h = await open('desktop');
+    const { page } = h;
+    await goto(page);
+    await UI.button(page, T.startSetup).click();
+    await UI.button(page, T.sendCode).click();
+    await idle(page);
+    await fillOtp(page, await lastCode());
+    await page.getByLabel(T.supervisorName).first().fill('أحمد المشرف');
+    await UI.button(page, T.next).click();
+    await idle(page);
+    await page.getByPlaceholder(T.schoolsPlaceholder).first().fill(SCHOOLS.map((s) => s.name).join('\n'));
+    const url = page.locator('#wz-weburl');
+    await url.fill('https://script.google.com/macros/s/HEADDEV/dev');
+    await UI.button(page, T.next).click();
+    await UI.text(page, 'هذا رابط الاختبار').waitFor();
+    await url.fill(EXEC);
+    await UI.button(page, T.next).click();
+    await idle(page);
+    await UI.button(page, T.goDashboard).click();
+    await idle(page);
+    await page.locator('#ad-dev-note').waitFor();
+    const token = JSON.parse(await page.evaluate((k) => localStorage.getItem(k), UI.sessionKey));
+    const list = await rpc('api_schools', token);
+    assert.ok(list.schools.every((s) => s.link.startsWith(EXEC + '?s=')), 'links use the saved /exec URL');
+    await UI.nav(page, T.nav.settings).click();
+    await idle(page);
+    assert.equal(await page.locator('#st-weburl').inputValue(), EXEC);
     await closeClean(h);
   });
 });

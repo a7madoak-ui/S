@@ -4,6 +4,7 @@
  *   Node:    const { loadApp } = require('./runtime');
  *            const app = loadApp({ srcDir: 'src', env });           // env from gas-mock createGasEnv()
  *   Browser: const app = GasRuntime.loadAppFromSource(codeSource, env);   // same API (new Function)
+ *            const app = GasRuntime.loadAppPrecompiled(compiled, env);    // same API, no eval (strict CSP)
  *
  *   app.call(fn, ...args)      → google.script.run semantics (public functions only, JSON-cloned args/result,
  *                                throws if the result contains a Date / function / undefined-in-array / NaN …)
@@ -231,9 +232,11 @@
     };
     app.doGet = function (params) { return app.doGetOutput(params).html; };
 
+    /** Runs a time-driven trigger. The default event carries the id of this project's trigger for
+     *  `fn` (like Apps Script), or 'mock-trigger' when none is installed. */
     app.runTrigger = function (fn, event) {
       return execute(fn, { uiContext: false, authMode: 'FULL' }, function (ex) {
-        var ev = event || clockEvent(env);
+        var ev = event || clockEvent(env, fn);
         return invokeIn(ex, fn, [ev]);
       });
     };
@@ -257,7 +260,7 @@
     /** Names of functions that google.script.run can reach (top-level, no trailing underscore). */
     app.functions = function () {
       return execute('introspect', {}, function (ex) {
-        var names = topLevelFunctionNames(holder.sources);
+        var names = holder.functionNames ? holder.functionNames.slice() : topLevelFunctionNames(holder.sources);
         if (ex.ctx) Object.getOwnPropertyNames(ex.ctx).forEach(function (n) { if (names.indexOf(n) < 0 && typeof ex.ctx[n] === 'function' && !(n in env.globals)) names.push(n); });
         return names.filter(function (n) { return !(n in env.globals) && typeof lookup(ex, n) === 'function'; }).sort();
       });
@@ -267,17 +270,22 @@
     return app;
   }
 
-  function clockEvent(env) {
+  function clockEvent(env, fn) {
     var d = new Date(env.clock.now());
-    return { authMode: 'FULL', triggerUid: 'mock-trigger', year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, 'day-of-month': d.getUTCDate(),
+    var trig = (env.triggers || []).filter(function (t) { return t.handler === fn; })[0];
+    return { authMode: 'FULL', triggerUid: trig ? String(trig.id) : 'mock-trigger', year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, 'day-of-month': d.getUTCDate(),
       'day-of-week': d.getUTCDay() || 7, hour: d.getUTCHours(), minute: d.getUTCMinutes(), second: d.getUTCSeconds(), timezone: 'UTC', 'week-of-year': 1 };
   }
 
   /* ------------------------------------------------------------------ browser engine (new Function) */
-  function functionEngine(sources, env) {
+  /** Parameter names the browser engines bind: the env globals, then the shadowed browser globals. */
+  function engineParams(env) {
     var names = Object.keys(env.globals).filter(function (n) { return IDENT.test(n) && n !== 'eval' && n !== 'arguments'; });
     var shadow = SHADOWED.filter(function (n) { return names.indexOf(n) < 0; });
-    var params = names.concat(shadow);
+    return { names: names, shadow: shadow, all: names.concat(shadow) };
+  }
+  function functionEngine(sources, env) {
+    var p = engineParams(env), names = p.names, shadow = p.shadow, params = p.all;
     var code = sources.map(function (s) { return s.code; }).join('\n;\n');
     var body = code + '\n;return function (__gas_code__) { return eval(__gas_code__); };';
     var factory = Function.apply(null, params.concat([body]));
@@ -305,6 +313,95 @@
     return app;
   }
 
+  /* ------------------------------------------------------------------ precompiled engine (no eval) */
+  /*
+   * For pages whose Content-Security-Policy forbids eval / new Function (e.g. a hosted demo). A build
+   * step wraps Code.gs in a real <script>:
+   *   compiled = { params: engineParams(env).all,           // the exact parameter list below
+   *                names:  topLevelFunctionNames([{code}]),  // every function the app may look up
+   *                factory: function (<params>) { <Code.gs>; return function (name) { switch (name) {
+   *                           case 'doGet': return typeof doGet === 'function' ? doGet : undefined; … } }; } }
+   * Each call is still a fresh execution (the factory re-runs Code.gs top-level code). The only code
+   * this engine "evaluates" is what runtime.js and the mock generate themselves: function lookups and
+   * HtmlService templates whose scriptlets are identifiers or calls with one string literal
+   * (<?!= include('Styles') ?>, <?!= bootJson ?>); anything else throws a clear error.
+   */
+  var LOOKUP_RE = /^\(typeof ([A-Za-z_$][\w$]*) === "function"\) \? \1 : undefined$/;
+  var TEMPLATE_HEAD = '(function (__vars, __esc, __str) {';
+  function unquote(lit) {
+    if (lit.charAt(0) === '"') return JSON.parse(lit);
+    return lit.slice(1, -1).replace(/\\(.)/g, function (all, ch) { return ch === 'n' ? '\n' : ch === 't' ? '\t' : ch; });
+  }
+  function parseLiteExpr(src) {
+    var s = String(src).trim(), m;
+    if (IDENT.test(s)) return { id: s };
+    m = /^([A-Za-z_$][\w$]*)\(\s*('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")\s*\)$/.exec(s);
+    if (m) return { call: m[1], arg: unquote(m[2]) };
+    throw new Error('[gas-run] template expression not supported without eval: ' + s.slice(0, 120));
+  }
+  /** Interprets the template function source the mock's HtmlTemplate.evaluate() generates. */
+  function templateLite(src, lookupFn) {
+    var lines = String(src).split('\n'), ops = [], m;
+    for (var i = 1; i < lines.length; i++) {
+      var ln = lines[i];
+      if (ln === '' || ln === '})' || ln === 'var __o = [];' || ln === 'return __o.join("");') continue;
+      if ((m = /^var ([A-Za-z_$][\w$]*) = __vars\[("(?:[^"\\]|\\.)*")\];$/.exec(ln))) { ops.push({ k: 'var', name: m[1], key: JSON.parse(m[2]) }); continue; }
+      if ((m = /^__o\.push\(("(?:[^"\\]|\\.)*")\);$/.exec(ln))) { ops.push({ k: 'lit', v: JSON.parse(m[1]) }); continue; }
+      if ((m = /^__o\.push\(__(esc|str)\(\((.*)\)\)\);$/.exec(ln))) { ops.push({ k: m[1], expr: parseLiteExpr(m[2]) }); continue; }
+      throw new Error('[gas-run] template code not supported without eval: ' + ln.slice(0, 120));
+    }
+    return function (vars, esc, str) {
+      var scope = {}, out = [];
+      function value(x) {
+        if (x.id) {
+          if (Object.prototype.hasOwnProperty.call(scope, x.id)) return scope[x.id];
+          var g = lookupFn(x.id);
+          if (g === undefined) throw new ReferenceError(x.id + ' is not defined');
+          return g;
+        }
+        var f = lookupFn(x.call);
+        if (typeof f !== 'function') throw new TypeError(x.call + ' is not a function');
+        return f(x.arg);
+      }
+      ops.forEach(function (op) {
+        if (op.k === 'var') scope[op.name] = vars[op.key];
+        else if (op.k === 'lit') out.push(op.v);
+        else out.push((op.k === 'esc' ? esc : str)(value(op.expr)));
+      });
+      return out.join('');
+    };
+  }
+  function precompiledEngine(compiled, env) {
+    var p = engineParams(env);
+    if (!compiled || typeof compiled.factory !== 'function' || !Array.isArray(compiled.params)) {
+      throw new Error('loadAppPrecompiled(compiled, env): compiled = { factory, params, names } is required');
+    }
+    if (compiled.params.join(',') !== p.all.join(',')) {
+      throw new Error('loadAppPrecompiled: the factory was built for other globals — rebuild it (expected ' + p.all.join(',') + ')');
+    }
+    return {
+      newExecution: function () {
+        var args = p.names.map(function (n) { return env.globals[n]; }).concat(p.shadow.map(function () { return undefined; }));
+        var lookupFn = compiled.factory.apply(undefined, args);
+        var ev = function (code) {
+          var s = String(code), m = LOOKUP_RE.exec(s);
+          if (m) return lookupFn(m[1]);
+          if (s.indexOf(TEMPLATE_HEAD) === 0) return templateLite(s, lookupFn);
+          throw new Error('[gas-run] eval is not available in the precompiled engine: ' + s.slice(0, 80));
+        };
+        return { eval: ev, JSON: JSON, Error: Error, ctx: null };
+      }
+    };
+  }
+  /** Eval-free browser loader (same app API as loadAppFromSource). */
+  function loadAppPrecompiled(compiled, env, o) {
+    o = o || {};
+    if (!env || !env.globals) throw new Error('loadAppPrecompiled(compiled, env): env from GasMock.createGasEnv() is required');
+    if (o.files) env.setFiles(o.files);
+    var holder = { sources: [{ filename: 'Code.gs', code: '' }], functionNames: (compiled.names || []).slice(), engine: precompiledEngine(compiled, env) };
+    return createApp(holder, env);
+  }
+
   /* ------------------------------------------------------------------ Node engine (node:vm) */
   function vmEngine(sources, env) {
     var vm = require('node:vm');
@@ -324,8 +421,9 @@
   }
 
   /**
-   * Node loader. o = { srcDir, env?, envOptions?, code? }.
+   * Node loader. o = { srcDir, env?, envOptions?, code?, manifest? }.
    * Reads every *.gs in srcDir (Code.gs first) and serves *.html files to HtmlService (fresh from disk).
+   * srcDir/appsscript.json (unless manifest: false) sets the OAuth scopes the mock enforces.
    */
   function loadApp(o) {
     o = o || {};
@@ -358,6 +456,11 @@
       }
       return null;
     });
+    // The manifest's explicit oauthScopes are what Apps Script grants: the mock enforces them per call.
+    if (o.manifest !== false && typeof env.setManifest === 'function') {
+      var mf = path.join(srcDir, 'appsscript.json');
+      try { if (fs.statSync(mf).isFile()) env.setManifest(JSON.parse(fs.readFileSync(mf, 'utf8'))); } catch (e) { /* no manifest */ }
+    }
     var sources = readSources();
     var holder = { sources: sources, engine: vmEngine(sources, env) };
     var app = createApp(holder, env);
@@ -371,6 +474,9 @@
   return {
     loadApp: loadApp,
     loadAppFromSource: loadAppFromSource,
+    loadAppPrecompiled: loadAppPrecompiled,
+    engineParams: engineParams,
+    topLevelFunctionNames: topLevelFunctionNames,
     checkTransferable: checkTransferable,
     extractBoot: extractBoot,
     buildEvent: buildEvent,

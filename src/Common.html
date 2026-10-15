@@ -990,7 +990,7 @@
   function mb(bytes) { return (Math.round(bytes / 104857.6) / 10) + ' ميجابايت'; }
   App.image = {
     compress: function (file, opts) {
-      var o = Object.assign({ maxSide: 1600, quality: 0.82, maxBytes: 3 * 1024 * 1024, thumbSide: 360 }, opts || {});
+      var o = Object.assign({ maxSide: 1280, quality: 0.72, maxBytes: 3 * 1024 * 1024, thumbSide: 360 }, opts || {});
       return new Promise(function (resolve, reject) {
         if (!file || typeof file.size !== 'number') { reject(mkErr('لم يتم اختيار صورة.', 'NO_FILE')); return; }
         var type = String(file.type || '').toLowerCase();

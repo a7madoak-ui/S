@@ -457,6 +457,8 @@ fieldset.ad-fieldset > legend { padding: 0; margin-bottom: 6px; }
 .ad-charts .card { min-width: 0; }
 .ad-chart-sk { height: 220px; border-radius: var(--radius); }
 .ad-sort { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: inherit; cursor: pointer; white-space: nowrap; }
+/* the whole header cell is the sort target (same look; matches .table th padding) */
+.table th .ad-sort { margin: -10px -14px; padding: 10px 14px; }
 .ad-sort svg { width: 14px; height: 14px; opacity: .35; }
 th[aria-sort="ascending"] .ad-sort, th[aria-sort="descending"] .ad-sort { color: var(--primary-700); }
 th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg { opacity: 1; color: var(--primary); }
@@ -522,6 +524,8 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
 @media (min-width: 640px) { .ad-thr { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .ad-unit { position: relative; }
 .ad-unit .input { padding-inline-end: 44px; }
+.ad-unit--wide { max-width: 240px; }
+.ad-unit--wide .input { padding-inline-end: 92px; }
 .ad-unit__suffix { position: absolute; top: 0; bottom: 0; inset-inline-end: 14px; display: flex; align-items: center; color: var(--muted); font-weight: 700; pointer-events: none; }
 .ad-tpl { display: grid; gap: 10px; }
 .ad-tpl + .ad-tpl { margin-top: 18px; padding-top: 18px; border-top: 1px dashed var(--border); }
@@ -554,6 +558,26 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
 .ad-hint-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .ad-hint-inline svg { width: 16px; height: 16px; }
 @media print { .ad-dayhead, .ad-savebar, .ad-setnav { display: none !important; } }
+
+/* touch screens: frequently tapped small controls get a 40–44px target (the app's floor) */
+@media (pointer: coarse) {
+  .ad-alert__btn { min-height: 40px; padding-inline: 12px; }
+  .ad-refresh { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
+  .ad-pin .btn { width: 40px; min-width: 40px; min-height: 40px; }
+  .ad-resend .ad-linkish { display: inline-flex; align-items: center; min-height: 44px; padding-inline: 6px; }
+}
+/* «بانتظار المراجعة» KPI value jumps to the pending reports */
+.ad-kpi-link { display: inline-flex; align-items: center; min-height: 40px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 6px; text-decoration-color: rgba(178, 106, 0, .35); }
+.ad-kpi-link:hover { text-decoration-color: currentColor; }
+/* corrections still owed by schools (returned on earlier days) */
+.ad-ro.card--accent { border-inline-start-color: var(--danger); }
+.ad-ro .ad-po__date svg { color: var(--danger); }
+.ad-ro .ad-po__item { border-color: rgba(192, 57, 43, .28); background: var(--danger-50); color: var(--danger-700); }
+.ad-ro .ad-po__item:hover { background: #F9DCD7; border-color: var(--danger); }
+/* Drive storage meter (settings → data) */
+.ad-storage { display: grid; gap: 6px; }
+.ad-storage__text { font-size: 13.5px; color: var(--text-2); }
+.ad-urlfield .input { direction: ltr; text-align: left; }
 </style>
 </head>
 <body>
@@ -672,7 +696,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     serverToday: null,
     view: 'today',
     day: null, dayDate: null, daySeq: 0, dayLoading: false, dayFetchedAt: 0, dayUpdated: '', dayError: null,
-    filter: 'all', search: '', alertsAll: false, missAll: false, poAll: false, flashId: null,
+    filter: 'all', search: '', alertsAll: false, missAll: false, poAll: false, roAll: false, flashId: null,
     reminded: {}, sentLinks: {}, revealed: {},
     schoolSearch: '',
     stats: { preset: 'last30', from: '', to: '', data: null, key: '', loading: false, error: null, seq: 0, charts: [], sort: { key: 'name', dir: 1 } },
@@ -777,6 +801,21 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     return (S.schoolsMeta && S.schoolsMeta.generalLink) || (S.boot && S.boot.generalLink) || (baseUrl() ? baseUrl() + '?f=all' : null);
   }
   function previewUrl() { return baseUrl() ? baseUrl() + '?s=__preview' : null; }
+  function devMode() { return !!((S.schoolsMeta && S.schoolsMeta.devMode) || (S.boot && S.boot.devMode) || (BOOT.status && BOOT.status.devMode)); }
+  /** Opened from the test deployment (…/dev): its own URL must never be handed to schools. */
+  function devNote() {
+    if (!devMode()) return '';
+    return baseUrl()
+      ? html`<div class="alert alert--warn mt-4" id="ad-dev-note">${icon('alert')}<div><span class="alert__title">فتحت النسخة التجريبية (⁦/dev⁩)</span>روابط المدارس هنا مأخوذة من رابط النشر المحفوظ فتعمل لدى المدارس، لكن افتح اللوحة دائمًا من رابط النشر المنتهي بـ ⁦/exec⁩ — فهو الذي يراه المديرون.</div></div>`
+      : html`<div class="alert alert--warn mt-4" id="ad-dev-note">${icon('alert')}<div><span class="alert__title">فتحت النسخة التجريبية (⁦/dev⁩)</span>الروابط المنسوخة من هنا لا تعمل لدى المدارس؛ افتح رابط النشر المنتهي بـ ⁦/exec⁩، أو الصقه في الإعدادات ← «طرق الإرسال».<div class="alert__actions"><button type="button" class="btn btn-secondary btn-sm" data-action="goto-settings" data-anchor="links">${icon('settings')}<span>فتح الإعدادات</span></button></div></div></div>`;
+  }
+  function gb(bytes) { return (Math.round(bytes / 1073741824 * 10) / 10).toFixed(1).replace(/\.0$/, ''); }
+  /** Evidence photos live in the supervisor's own Drive: warn before it is full (uploads would stop). */
+  function storageNote() {
+    var st = (S.boot && S.boot.storage) || null;
+    if (!st || !(st.limit > 0) || st.used / st.limit < 0.85) return '';
+    return html`<div class="alert alert--warn mt-4">${icon('alert')}<div><span class="alert__title">مساحة Google Drive لديك تقترب من الامتلاء (${gb(st.used)} من ${gb(st.limit)} جيجابايت)</span>احذف صور الشواهد القديمة من مجلد «نبض المدارس — شواهد المتابعة» أو وسّع مساحتك، لتجنّب توقف رفع الصور.</div></div>`;
+  }
   function schoolById(id) { return (S.schools || []).filter(function (s) { return s.id === id; })[0] || null; }
   function schoolLink(id, fallback) {
     var s = schoolById(id);
@@ -797,6 +836,15 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
   function msgHtml(text) {
     var parts = String(text === null || text === undefined ? '' : text).split(/(https?:\/\/[^\s«»"<>]+)/);
     return parts.map(function (p, i) { return i % 2 ? html`<bdi dir="ltr" class="ad-msg__url">${p}</bdi>` : html`${p}`; });
+  }
+  /** "principal • phone": the phone is an isolated LTR run, so digits (or a legacy '+') never flip in RTL lines. */
+  function whoLine(s) {
+    var p = (s && s.principal) || '', ph = s && s.phone ? html`<bdi dir="ltr">${s.phone}</bdi>` : '';
+    return p && ph ? html`${p} • ${ph}` : (p || ph);
+  }
+  /** A school's link for a given day: past days the school may still send open that day directly (&d=). */
+  function dayLink(link, date) {
+    return link && date && date < todayISO() ? link + '&d=' + encodeURIComponent(date) : link;
   }
   function returnMessage(school, date, note) {
     var s = schoolById(school.id) || school;
@@ -825,13 +873,19 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
 
   /* --- bulk text (mirrors the server's parser for the live count) */
   var BULK_HEADERS = ['اسم المدرسة', 'المدرسة', 'المدارس', 'name', 'school'];
+  /** Cells of a pasted line; a leading serial «م» / ministry-number cell is dropped (same rule as the server). */
+  function bulkCells(line) {
+    var parts = String(line).split(/[\t,،|]/).map(function (p) { return p.trim(); });
+    if (parts.length > 1 && /^(?:[\d٠-٩]{1,15}|م|#)$/.test(parts[0])) parts.shift();
+    return parts;
+  }
   function parseBulk(text, existing) {
     var seen = {};
     (existing || []).forEach(function (n) { seen[normAr(n)] = true; });
     var items = [], skipped = [];
     String(text || '').replace(/\r\n?/g, '\n').split('\n').forEach(function (line, i) {
       if (!line.trim()) return;
-      var name = line.split(/[\t,،|]/)[0].replace(/^[\d٠-٩]{1,3}\s*[-.)–]\s*/, '').replace(/^[•●▪\-*]\s*/, '').replace(/\s+/g, ' ').trim();
+      var name = bulkCells(line)[0].replace(/^[\d٠-٩]{1,3}\s*[-.)–]\s*/, '').replace(/^[•●▪\-*]\s*/, '').replace(/\s+/g, ' ').trim();
       if (BULK_HEADERS.indexOf(name.toLowerCase()) >= 0) { skipped.push({ line: i + 1, reason: 'سطر عناوين' }); return; }
       if (name.length < 2 || name.length > 120) { skipped.push({ line: i + 1, reason: 'اسم غير صالح' }); return; }
       var k = normAr(name);
@@ -906,7 +960,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
   function loadSchools() {
     if (S.schoolsPromise) return S.schoolsPromise;
     S.schoolsPromise = auth('api_schools').then(function (r) {
-      S.schoolsMeta = { baseUrl: r.baseUrl || null, generalLink: r.generalLink || null };
+      S.schoolsMeta = { baseUrl: r.baseUrl || null, generalLink: r.generalLink || null, devMode: !!r.devMode };
       S.schools = (r.schools || []).slice();
       if (S.boot) S.boot.schoolsCount = S.schools.filter(function (s) { return s.active; }).length;
       return S.schools;
@@ -1051,14 +1105,17 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     tick: function () {
       if (S.mode !== 'app' || S.view !== 'today' || document.visibilityState === 'hidden') return;
       if (!S.day || !S.day.isToday || S.dayLoading) return;
-      if (Date.now() - S.dayFetchedAt >= 58000) Today.load(S.day.date, { silent: true });
+      // «today» is re-requested without a date: after midnight the server answers with the new day
+      if (Date.now() - S.dayFetchedAt >= 58000) Today.load(undefined, { silent: true });
     }
   };
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible' && S.mode === 'app' && S.view === 'today' && S.day && S.day.isToday && !S.dayLoading && Date.now() - S.dayFetchedAt > 60000) {
-      Today.load(S.day.date, { silent: true });
+      Today.load(undefined, { silent: true });
     }
   });
+  /** The date to re-load for the shown day: none (= the server's today) while showing today. */
+  function reloadDate() { return S.day ? (S.day.isToday ? undefined : S.day.date) : (S.dayDate || undefined); }
 
   function resetData() {
     S.boot = null; S.bootPromise = null; S.settings = null; S.settingsPromise = null; S.schools = null; S.schoolsMeta = null;
@@ -1214,7 +1271,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       AutoRefresh.stop();
       document.title = 'تجهيز النظام — ' + systemTitle();
       var saved = A.store.get('wizard', null);
-      var data = { name: '', title: TITLE_CHIPS[0], office: '', phone: '', systemTitle: BOOT.systemTitle || DEFAULT_TITLE, preset: 'standard', schoolsText: '' };
+      var data = { name: '', title: TITLE_CHIPS[0], office: '', phone: '', systemTitle: BOOT.systemTitle || DEFAULT_TITLE, preset: 'standard', schoolsText: '', webAppUrl: '' };
       if (saved && saved.data && typeof saved.data === 'object') Object.keys(data).forEach(function (k) { if (typeof saved.data[k] === 'string') data[k] = saved.data[k]; });
       var step = saved && S.token && (saved.step === 3 || saved.step === 4) ? saved.step : 1;
       Wizard.st = { step: step, data: data, added: 0 };
@@ -1237,7 +1294,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     collect: function () {
       var d = Wizard.st.data;
       var v = function (id) { var el = byId(id); return el ? el.value : null; };
-      [['wz-name', 'name'], ['wz-title', 'title'], ['wz-office', 'office'], ['wz-phone', 'phone'], ['wz-system', 'systemTitle'], ['wz-schools', 'schoolsText']].forEach(function (p) {
+      [['wz-name', 'name'], ['wz-title', 'title'], ['wz-office', 'office'], ['wz-phone', 'phone'], ['wz-system', 'systemTitle'], ['wz-schools', 'schoolsText'], ['wz-weburl', 'webAppUrl']].forEach(function (p) {
         var x = v(p[0]);
         if (x !== null) d[p[1]] = x;
       });
@@ -1354,6 +1411,12 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
           <div class="field__foot"><span class="field__hint">سطر لكل مدرسة. يمكنك النسخ من Excel مباشرة.</span><span class="field__count fw-600" id="wz-count" aria-live="polite"></span></div>
         </div>
         <div class="ad-muted-box mt-3">${icon('info', 18)} يمكنك إضافة بيانات اختيارية بعد الاسم مفصولة بفاصلة: <strong>اسم المدرسة، اسم المدير، الجوال، عدد الطلاب، عدد المعلمين، عدد الإداريين</strong>.</div>
+        ${Wizard.needsUrl() ? html`<div class="field ad-urlfield mt-4">
+          <label class="field__label" for="wz-weburl">رابط تطبيق الويب (ينتهي بـ ⁦/exec⁩)</label>
+          <input id="wz-weburl" class="input" type="url" inputmode="url" dir="ltr" autocomplete="off" spellcheck="false" maxlength="300" value="${d.webAppUrl}" placeholder="https://script.google.com/macros/s/…/exec">
+          ${fieldError('wz-weburl-err')}
+          <p class="field__hint">${BOOT.status.devMode ? 'فتحت هذه الصفحة من رابط الاختبار (⁦/dev⁩) الذي لا يعمل لدى المدارس. ' : ''}انسخ «رابط تطبيق الويب» من «نشر» ← «إدارة عمليات النشر» والصقه هنا — منه تُبنى روابط المدارس. يمكنك إضافته لاحقًا من الإعدادات.</p>
+        </div>` : ''}
         <div class="ad-wiz-actions">
           <button type="button" class="btn btn-primary btn-lg" data-action="wiz-finish"><span>حفظ ومتابعة</span>${icon('chevron-left')}</button>
           <button type="button" class="btn btn-ghost" data-action="wiz-skip">تخطي</button>
@@ -1383,6 +1446,8 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
         <div class="alert alert--info mt-4">${icon('star')}<div>احفظ رابط هذه الصفحة في المفضلة — منه تدخل إلى لوحة التحكم دائمًا.</div></div>
         <div class="ad-wiz-actions"><button type="button" class="btn btn-primary btn-lg btn-block" data-action="wiz-go">${icon('home')}<span>انتقل إلى لوحة التحكم</span></button></div>`;
     },
+    /** The deployment URL is captured automatically when this page is opened from '/exec'; ask only otherwise. */
+    needsUrl: function () { return !!(BOOT.status && (BOOT.status.devMode || !BOOT.status.deployed)); },
     count: function () {
       var el = byId('wz-schools'), out = byId('wz-count');
       if (!el || !out) return;
@@ -1412,6 +1477,15 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
         preset: d.preset
       };
       if (payload.supervisor.name.length < 2) { Wizard.goto(3); setTimeout(Wizard.validate3, 0); return; }
+      var wu = (d.webAppUrl || '').trim(), wuEl = byId('wz-weburl');
+      if (wu && wuEl) {
+        if (!/^https:\/\/script\.google\.com\/(?:a\/macros\/[^\/?#\s]+|macros)\/s\/[\w-]+\/exec(?:[?#].*)?$/.test(wu)) {
+          setFieldError(wuEl, /\/dev(?:[?#].*)?$/.test(wu) ? 'هذا رابط الاختبار (⁦/dev⁩) — انسخ رابط النشر المنتهي بـ ⁦/exec⁩.' : 'الرابط يبدأ بـ https://script.google.com/ وينتهي بـ ⁦/exec⁩.');
+          wuEl.focus();
+          return;
+        }
+        payload.webAppUrl = wu;
+      }
       return A.busy(btn, auth('api_completeSetup', payload)).then(function (r) {
         Wizard.st.added = r && r.added || 0;
         BOOT.status.setupDone = true;
@@ -1482,15 +1556,20 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       Today.paint();
       if (S.dayLoading) return;
       if (!S.day) Today.load(S.dayDate);
-      else if (Date.now() - S.dayFetchedAt > 60000) Today.load(S.day.date, { silent: true });
+      else if (Date.now() - S.dayFetchedAt > 60000) Today.load(reloadDate(), { silent: true });
     },
-    reselect: function () { try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { window.scrollTo(0, 0); } },
+    reselect: function () {
+      // tapping «اليوم» again at the top jumps to the reports waiting for review
+      if ((window.scrollY || 0) < 40 && pendingLeft() > 0 && byId('td-reports')) { ACT['show-pending'](); return; }
+      try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { window.scrollTo(0, 0); }
+    },
     set: function (d) {
+      if (S.day && S.day.date !== d.date) { S.alertsAll = false; S.missAll = false; }   // the day rolled over
       S.day = d;
       S.dayDate = d.date;
       S.dayFetchedAt = Date.now();
       S.dayUpdated = A.time.fmt(d.now) || nowText();
-      if (d.isToday) S.serverToday = d.date;
+      if (d.today) S.serverToday = d.today; else if (d.isToday) S.serverToday = d.date;
       Shell.badge();
     },
     load: function (date, o) {
@@ -1583,8 +1662,9 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
         </div>`;
     },
     noteHtml: function (d) {
-      if (d.isWorkday) return '';
-      return html`<div class="alert alert--info mt-4">${icon('calendar')}<div><span class="alert__title">يوم إجازة</span>${d.isHoliday ? 'هذا اليوم مسجّل إجازة في الإعدادات — لا يُنتظر فيه إرسال التقارير.' : 'هذا اليوم ليس من أيام الدوام — لا يُنتظر فيه إرسال التقارير.'}</div></div>`;
+      var out = [devNote(), storageNote()];
+      if (!d.isWorkday) out.push(html`<div class="alert alert--info mt-4">${icon('calendar')}<div><span class="alert__title">يوم إجازة</span>${d.isHoliday ? 'هذا اليوم مسجّل إجازة في الإعدادات — لا يُنتظر فيه إرسال التقارير.' : 'هذا اليوم ليس من أيام الدوام — لا يُنتظر فيه إرسال التقارير.'}</div></div>`);
+      return out;
     },
     skeleton: function (body) {
       var k = [0, 1, 2, 3, 4, 5].map(function () { return html`<div class="kpi ad-kpi-sk" aria-hidden="true">${skel()}${skel('skeleton--title')}${skel('skeleton--text', 'width:80%')}</div>`; });
@@ -1616,7 +1696,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       if (d.reviewEnabled || t.pending) {
         list.push(html`<div class="kpi${t.pending ? ' kpi--pending' : (sub ? ' kpi--ok' : '')}">
           <div class="kpi__label">${icon('inbox')}<span>بانتظار المراجعة</span></div>
-          <div class="kpi__value">${t.pending || 0}</div>
+          <div class="kpi__value">${t.pending > 0 ? html`<button type="button" class="ad-kpi-link" data-action="show-pending" aria-label="${'عرض التقارير بانتظار المراجعة (' + t.pending + ')'}">${t.pending}</button>` : 0}</div>
           <div class="kpi__meta">معتمد ${t.approved || 0} • معاد ${t.returned || 0}</div>
           ${t.pending > 0 ? html`<div class="ad-kpi-action"><button type="button" class="btn btn-sm btn-primary" data-action="approve-all">${icon('check-double')}<span>اعتماد الكل</span></button></div>` : ''}
         </div>`);
@@ -1660,9 +1740,33 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     },
     gridHtml: function (d) {
       var side = [];
-      if ((d.pendingOther || []).length) side.push(Today.poHtml(d));
+      if ((d.pendingOther || []).length) side.push(Today.listHtml(d.pendingOther, { id: 'td-po-t', cls: 'ad-po', title: 'بانتظار المراجعة من أيام سابقة', icon: 'hourglass', count: 'ad-count--pending', all: 'poAll', toggle: 'po-toggle' }));
+      if ((d.returnedOther || []).length) side.push(Today.listHtml(d.returnedOther, { id: 'td-ro-t', cls: 'ad-po ad-ro', title: 'بانتظار تصحيح المدرسة', icon: 'undo', count: 'ad-count--danger', all: 'roAll', toggle: 'ro-toggle', hint: 'تقارير أعدتها للتصحيح في أيام سابقة ولم تصحّحها المدرسة بعد.' }));
       if (d.isWorkday) side.push(Today.missHtml(d));
       return html`<div class="ad-today-col"${side.length ? '' : raw(' style="grid-column:1/-1"')}>${Today.alertsHtml(d)}</div>${side.length ? html`<div class="ad-today-col">${side}</div>` : ''}`;
+    },
+    /** Reports of other days grouped by date (pending review / returned and not corrected yet). */
+    listHtml: function (list, o) {
+      var groups = [], map = {};
+      list.forEach(function (p) {
+        if (!map[p.date]) { map[p.date] = { date: p.date, items: [] }; groups.push(map[p.date]); }
+        map[p.date].items.push(p);
+      });
+      var limit = S[o.all] ? 999 : 8, used = 0;
+      return html`<section class="card card--accent ${o.cls}" aria-labelledby="${o.id}">
+        <div class="card__head ad-head-nowrap">${icon(o.icon)}<h2 class="card__title" id="${o.id}">${o.title}</h2><span class="ad-count ${o.count}">${list.length >= 50 ? '+50' : list.length}</span></div>
+        <div class="card__body">
+          ${o.hint ? html`<p class="text-sm text-muted mb-2">${o.hint}</p>` : ''}
+          ${groups.map(function (g) {
+            if (used >= limit) return '';
+            var items = g.items.slice(0, limit - used);
+            used += items.length;
+            return html`<div class="ad-po__group"><div class="ad-po__date">${icon('calendar')}<span>${dateShort(g.date)}</span></div>
+              <div class="ad-po__items">${items.map(function (p) { return html`<button type="button" class="ad-po__item" data-action="goto-date" data-date="${p.date}" data-id="${p.schoolId}" title="${'فتح تقارير ' + dateShort(p.date)}"><span>${p.schoolName}</span>${icon('chevron-left', 16)}</button>`; })}</div></div>`;
+          })}
+          ${list.length > 8 ? html`<button type="button" class="btn btn-ghost btn-sm mt-2" data-action="${o.toggle}">${S[o.all] ? 'عرض أقل' : 'عرض الكل (' + list.length + ')'}</button>` : ''}
+        </div>
+      </section>`;
     },
     alertsHtml: function (d) {
       var al = d.alerts || [];
@@ -1673,7 +1777,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       var items = shown.map(function (a) {
         var lv = LV[a.level] || LV.info, row = byId_[a.schoolId], act = '';
         if (row && row.report) act = html`<button type="button" class="ad-alert__btn" data-action="open-report" data-id="${a.schoolId}">${icon('eye')}<span>عرض التقرير</span></button>`;
-        else if (row && a.type === 'missing_streak') act = html`<button type="button" class="ad-alert__btn ad-alert__btn--wa" data-action="remind" data-id="${a.schoolId}">${icon('whatsapp')}<span>تذكير</span></button>`;
+        else if (row && a.type === 'missing_streak' && d.canSubmit !== false) act = html`<button type="button" class="ad-alert__btn ad-alert__btn--wa" data-action="remind" data-id="${a.schoolId}">${icon('whatsapp')}<span>تذكير</span></button>`;
         return html`<div class="alert ${lv[0]} ad-alert">${icon(lv[1])}<div><span class="ad-alert__text">${a.text}</span>${act}</div></div>`;
       });
       var body;
@@ -1690,51 +1794,37 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
         ${body}
       </section>`;
     },
-    poHtml: function (d) {
-      var po = d.pendingOther || [], groups = [], map = {};
-      po.forEach(function (p) {
-        if (!map[p.date]) { map[p.date] = { date: p.date, items: [] }; groups.push(map[p.date]); }
-        map[p.date].items.push(p);
-      });
-      var limit = S.poAll ? 999 : 8, used = 0;
-      return html`<section class="card card--accent ad-po" aria-labelledby="td-po-t">
-        <div class="card__head ad-head-nowrap">${icon('hourglass')}<h2 class="card__title" id="td-po-t">بانتظار المراجعة من أيام سابقة</h2><span class="ad-count ad-count--pending">${po.length >= 50 ? '+50' : po.length}</span></div>
-        <div class="card__body">
-          ${groups.map(function (g) {
-            if (used >= limit) return '';
-            var items = g.items.slice(0, limit - used);
-            used += items.length;
-            return html`<div class="ad-po__group"><div class="ad-po__date">${icon('calendar')}<span>${dateShort(g.date)}</span></div>
-              <div class="ad-po__items">${items.map(function (p) { return html`<button type="button" class="ad-po__item" data-action="goto-date" data-date="${p.date}" data-id="${p.schoolId}" title="${'فتح تقارير ' + dateShort(p.date)}"><span>${p.schoolName}</span>${icon('chevron-left', 16)}</button>`; })}</div></div>`;
-          })}
-          ${po.length > 8 ? html`<button type="button" class="btn btn-ghost btn-sm mt-2" data-action="po-toggle">${S.poAll ? 'عرض أقل' : 'عرض الكل (' + po.length + ')'}</button>` : ''}
-        </div>
-      </section>`;
-    },
     missHtml: function (d) {
       var miss = d.rows.filter(function (r) { return !r.report && r.flags.indexOf('missing') >= 0; });
-      var passed = d.date < todayISO() || (d.isToday && d.now > d.deadline);
-      var head = html`<div class="card__head ad-head-nowrap">${icon('clock')}<h2 class="card__title" id="td-miss-t">لم تُرسل بعد</h2>${miss.length ? html`<span class="ad-count">${miss.length}</span>` : ''}<span class="text-sm text-muted">${passed ? 'انتهى الموعد ' : 'الموعد '}${A.time.fmt(d.deadline)}</span></div>`;
+      var past = d.date < todayISO();
+      var passed = past || (d.isToday && d.now > d.deadline);
+      var head = html`<div class="card__head ad-head-nowrap">${icon('clock')}<h2 class="card__title" id="td-miss-t">${past ? 'لم تُرسل' : 'لم تُرسل بعد'}</h2>${miss.length ? html`<span class="ad-count">${miss.length}</span>` : ''}<span class="text-sm text-muted">${passed ? 'انتهى الموعد ' : 'الموعد '}${A.time.fmt(d.deadline)}</span></div>`;
       if (!miss.length) {
         return html`<section class="card ad-missing" aria-labelledby="td-miss-t">${head}<div class="card__body"><div class="ad-allgood">${icon('check-double')}<span>${(d.totals || {}).submitted ? 'أرسلت كل المدارس تقاريرها لهذا اليوم.' : 'لا توجد مدارس نشطة متوقَّع منها الإرسال.'}</span></div></div></section>`;
       }
       var shown = S.missAll ? miss : miss.slice(0, 6);
+      var canRemind = d.canSubmit !== false;   // only while the schools can still send this day
+      var foot = canRemind
+        ? html`<div class="ad-card-foot"><button type="button" class="btn btn-secondary btn-sm" data-action="general-reminder">${icon('copy')}<span>نسخ رسالة تذكير عامة</span></button><span class="text-xs text-muted">${past ? 'يرسل المدير تقرير هذا اليوم من «لم ترسل تقرير يوم سابق؟» في صفحة مدرسته' : 'لمجموعة واتساب المديرين'}</span></div>`
+        : html`<div class="ad-card-foot"><span class="text-xs text-muted">${past
+          ? 'مضى هذا اليوم ولم يعد متاحًا للإرسال — تُقبل تقارير الأيام الفائتة خلال آخر أيام العمل المحددة في الإعدادات ← «مواعيد التسليم».'
+          : 'انتهى وقت الإرسال اليوم والإرسال المتأخر متوقف — لا يستطيع من لم يرسل الإرسال الآن.'}</span></div>`;
       return html`<section class="card ad-missing" aria-labelledby="td-miss-t">${head}
-        <ul class="ad-miss-list mt-2">${shown.map(Today.missItem)}</ul>
+        <ul class="ad-miss-list mt-2">${shown.map(function (r) { return Today.missItem(r, canRemind); })}</ul>
         ${miss.length > 6 ? html`<div class="ad-miss-more"><button type="button" class="btn btn-ghost btn-sm" data-action="miss-toggle">${S.missAll ? 'عرض أقل' : 'عرض الكل (' + miss.length + ')'}</button></div>` : ''}
-        <div class="ad-card-foot"><button type="button" class="btn btn-secondary btn-sm" data-action="general-reminder">${icon('copy')}<span>نسخ رسالة تذكير عامة</span></button><span class="text-xs text-muted">لمجموعة واتساب المديرين</span></div>
+        ${foot}
       </section>`;
     },
-    missItem: function (r) {
+    missItem: function (r, canRemind) {
       var s = r.school, streak = r.flags.indexOf('missing_streak') >= 0;
-      var sub = [s.principal, s.phone].filter(Boolean);
+      var who = whoLine(s);
       return html`<li class="ad-miss${S.reminded[s.id] ? ' is-reminded' : ''}" data-id="${s.id}">
         <div class="ad-miss__main">
           <div class="ad-miss__name"><span>${s.name}</span>${streak ? html`<span class="badge badge--danger">متكرر</span>` : ''}</div>
-          <div class="ad-miss__sub">${sub.length ? sub.join(' • ') : 'لا يوجد جوال مسجّل'}</div>
+          <div class="ad-miss__sub">${who || 'لا يوجد جوال مسجّل'}</div>
         </div>
         <div class="ad-miss__actions">
-          <button type="button" class="btn btn-sm btn-whatsapp" data-action="remind" data-id="${s.id}" aria-label="${'تذكير «' + s.name + '» عبر واتساب'}">${icon('whatsapp')}<span>تذكير</span></button>
+          ${canRemind !== false ? html`<button type="button" class="btn btn-sm btn-whatsapp" data-action="remind" data-id="${s.id}" aria-label="${'تذكير «' + s.name + '» عبر واتساب'}">${icon('whatsapp')}<span>تذكير</span></button>` : ''}
           <button type="button" class="btn btn-sm btn-ghost btn-icon" data-action="copy-link" data-id="${s.id}" aria-label="${'نسخ رابط «' + s.name + '»'}" title="نسخ رابط المدرسة">${icon('copy')}</button>
         </div>
       </li>`;
@@ -1796,7 +1886,13 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
           </tr></thead>
           <tbody>${rows.map(function (r) { return Today.rowHtml(r, cols, d); })}</tbody>
         </table></div>
-        <div class="ad-cards hide-desktop">${rows.map(function (r) { return Today.cardHtml(r, cols, d); })}</div>`);
+        <div class="ad-cards hide-desktop">${Today.cardRows(rows, d).map(function (r) { return Today.cardHtml(r, cols, d); })}</div>`);
+    },
+    /** Phone cards: under «الكل» the missing schools (already listed in their own card above) go last,
+     *  so the reports waiting for review come first. The desktop table keeps the server order. */
+    cardRows: function (rows, d) {
+      if (S.filter !== 'all' || !d.isWorkday) return rows;
+      return rows.filter(function (r) { return r.report; }).concat(rows.filter(function (r) { return !r.report; }));
     },
     rowHtml: function (r, cols, d) {
       var s = r.school, rep = r.report, st = Today.status(r), dv = rep ? (rep.derived || {}) : {}, att = dv.attendance || {}, th = thr();
@@ -1816,6 +1912,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     actionsHtml: function (r, d, card) {
       var rep = r.report, id = r.school.id;
       if (!rep) {
+        if (d && d.canSubmit === false) return card ? '' : html`<span class="text-muted" aria-hidden="true">—</span>`;   // that day is closed to the school
         return card
           ? html`<button type="button" class="btn btn-sm btn-whatsapp" data-action="remind" data-id="${id}">${icon('whatsapp')}<span>تذكير عبر واتساب</span></button><button type="button" class="btn btn-sm btn-secondary btn-icon" data-action="copy-link" data-id="${id}" aria-label="نسخ رابط المدرسة" title="نسخ رابط المدرسة">${icon('copy')}</button>`
           : html`<button type="button" class="btn btn-sm btn-whatsapp" data-action="remind" data-id="${id}" aria-label="${'تذكير «' + r.school.name + '» عبر واتساب'}">${icon('whatsapp')}<span>تذكير</span></button>`;
@@ -1839,7 +1936,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       var acts = Today.actionsHtml(r, d, true);
       var meta = rep
         ? html`${dv.mode ? html`<span class="chip">${dv.mode}</span>` : ''}${rep.late ? badgeLate() : ''}${r.flags.indexOf('corrected') >= 0 ? badgeCorrected() : ''}<span>${A.time.fmt(rep.submittedAt)}</span>`
-        : html`<span>${[s.principal, s.phone].filter(Boolean).join(' • ') || 'لم يُرسل التقرير بعد'}</span>`;
+        : html`<span>${whoLine(s) || 'لم يُرسل التقرير بعد'}</span>`;
       return html`<article class="ad-report-card${S.flashId === s.id ? ' is-flash' : ''}" data-row="${s.id}" data-status="${st}" data-id="${s.id}"${rep ? raw(' data-action="open-report"') : ''}>
         <div class="ad-report-card__top">
           ${rep ? html`<button type="button" class="ad-report-card__name" data-action="open-report" data-id="${s.id}">${s.name}</button>` : html`<div class="ad-report-card__name">${s.name}</div>`}
@@ -1877,7 +1974,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       S.dayFetchedAt = 0;
       Today.sync();
     },
-    sync: A.debounce(function () { if (S.mode === 'app' && S.day && !S.dayLoading) Today.load(S.day.date, { silent: true }); }, 1500)
+    sync: A.debounce(function () { if (S.mode === 'app' && S.day && !S.dayLoading) Today.load(reloadDate(), { silent: true }); }, 1500)
   };
   VIEWS.today = Today;
 
@@ -1938,9 +2035,10 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     var d = S.day, row = d ? d.rows.filter(function (r) { return r.school.id === id; })[0] : null;
     var s = schoolById(id) || (row && row.school);
     if (!s) return;
-    var link = schoolLink(id, row && row.school);
+    var date = d ? d.date : todayISO();
+    var link = dayLink(schoolLink(id, row && row.school), date);   // a past day the school may still send opens directly
     if (!link) { A.toast('رابط المدرسة غير متاح — يجب نشر النظام كتطبيق ويب أولًا.', 'danger'); return; }
-    var text = A.fillTemplate(msgTpl(), { school: s.name, link: link, supervisor: supSig(), date: dateMsg(d ? d.date : todayISO()), pin: s.pin || '' });
+    var text = A.fillTemplate(msgTpl(), { school: s.name, link: link, supervisor: supSig(), date: dateMsg(date), pin: s.pin || '' });
     A.wa.open(s.phone || (row && row.school.phone) || '', text);
     S.reminded[id] = true;
     var li = $('.ad-miss[data-id="' + cssEsc(id) + '"]');
@@ -1954,7 +2052,9 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
   }
   function generalReminderText(d) {
     var miss = d.rows.filter(function (r) { return !r.report && r.flags.indexOf('missing') >= 0; });
-    var L = ['السلام عليكم ورحمة الله وبركاته', 'نذكّر بتعبئة تقرير المتابعة اليومي ليوم ' + dateMsg(d.date) + '.', '', 'المدارس التي لم ترسل بعد:'];
+    var past = d.date < todayISO();
+    var L = ['السلام عليكم ورحمة الله وبركاته', 'نذكّر بتعبئة تقرير المتابعة اليومي ليوم ' + dateMsg(d.date) + '.' +
+      (past ? '\n(من صفحة المدرسة: «لم ترسل تقرير يوم سابق؟» ثم اختر اليوم)' : ''), '', past ? 'المدارس التي لم ترسل:' : 'المدارس التي لم ترسل بعد:'];
     miss.forEach(function (r) { L.push('• ' + r.school.name); });
     L.push('');
     if (generalEnabled() && generalLink()) L.push('رابط التعبئة: ' + generalLink());
@@ -1985,7 +2085,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     }
     var miss = d.rows.filter(function (r) { return !r.report && r.flags.indexOf('missing') >= 0; });
     if (miss.length) {
-      L.push('', '⏰ لم تُرسل بعد (' + miss.length + '):');
+      L.push('', '⏰ ' + (d.date < todayISO() ? 'لم تُرسل' : 'لم تُرسل بعد') + ' (' + miss.length + '):');
       miss.forEach(function (r) { L.push('• ' + r.school.name); });
     }
     if (supSig()) L.push('', supSig());
@@ -2354,7 +2454,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       if (S.view !== 'schools') return;
       Schools.paintWays();
       var alertEl = byId('sc-alert');
-      setHtml(alertEl, S.schools && !baseUrl() ? html`<div class="alert alert--warn mb-4">${icon('alert')}<div><span class="alert__title">روابط المدارس غير متاحة بعد</span>لم يُنشر النظام كتطبيق ويب، لذلك لا تظهر الروابط. افتح ملف Google Sheets ← «الإضافات» ← «Apps Script» ← «نشر» ← «نشر جديد» ← «تطبيق ويب»، ثم افتح لوحة التحكم من الرابط الجديد.</div></div>` : '');
+      setHtml(alertEl, html`${devNote()}${S.schools && !baseUrl() && !devMode() ? html`<div class="alert alert--warn mb-4">${icon('alert')}<div><span class="alert__title">روابط المدارس غير متاحة بعد</span>لم يُنشر النظام كتطبيق ويب (أو لم يُحفظ رابطه)، لذلك لا تظهر الروابط. افتح ملف Google Sheets ← «الإضافات» ← «Apps Script» ← «نشر» ← «نشر جديد» ← «تطبيق ويب»، ثم افتح لوحة التحكم من الرابط المنتهي بـ ⁦/exec⁩ — أو الصقه في الإعدادات ← «طرق الإرسال».</div></div>` : ''}`);
       Schools.paintList();
     },
     paintWays: function () {
@@ -2588,7 +2688,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
         m.setBody(html`<div class="ad-bulk-result">
           <div class="alert ${r.added ? 'alert--ok' : 'alert--warn'}">${icon(r.added ? 'check' : 'info')}<div><span class="alert__title">${r.added ? 'أُضيفت ' + plural(r.added, P_SCHOOL) : 'لم تُضف مدارس جديدة'}</span>${r.added ? 'لكل مدرسة رابط خاص ورمز — أرسل الروابط من زر «إرسال الروابط».' : ''}</div></div>
           ${skipped.length ? html`<div><h4 class="mb-1">لم تُضف (${skipped.length}):</h4><ul>${skipped.map(function (s) {
-            var ln = (lines[s.line - 1] || '').split(/[\t,،|]/)[0].trim();
+            var ln = bulkCells(lines[s.line - 1] || '')[0];
             return html`<li>السطر ${s.line}${ln ? html` «${ln.slice(0, 60)}»` : ''}: <strong>${s.reason}</strong></li>`;
           })}</ul></div>` : ''}
         </div>`);
@@ -2632,7 +2732,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       var sent = !!S.sentLinks[s.id];
       return html`<li class="ad-send${sent ? ' is-sent' : ''}" data-id="${s.id}">
         <span class="ad-send__state" aria-hidden="true">${icon('check')}</span>
-        <div class="ad-send__main"><div class="ad-send__name">${s.name}</div><div class="ad-send__sub">${[s.principal, s.phone].filter(Boolean).join(' • ') || 'لا يوجد جوال — ستختار المحادثة يدويًا'}${sent ? ' • أُرسل ✓' : ''}</div></div>
+        <div class="ad-send__main"><div class="ad-send__name">${s.name}</div><div class="ad-send__sub">${whoLine(s) || 'لا يوجد جوال — ستختار المحادثة يدويًا'}${sent ? ' • أُرسل ✓' : ''}</div></div>
         <div class="ad-send__actions">
           <button type="button" class="btn btn-sm btn-whatsapp" data-action="sl-wa" data-id="${s.id}" aria-label="${'إرسال رابط «' + s.name + '» عبر واتساب'}"${attr(!s.link, 'disabled')}>${icon('whatsapp')}<span class="hide-mobile">واتساب</span></button>
           <button type="button" class="btn btn-sm btn-secondary btn-icon" data-action="sl-copy" data-id="${s.id}" aria-label="${'نسخ رسالة «' + s.name + '»'}" title="نسخ الرسالة"${attr(!s.link, 'disabled')}>${icon('copy')}</button>
@@ -2780,6 +2880,14 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
   /* ============================================================== 11. view: stats */
   var STAT_PRESETS = [['week', 'هذا الأسبوع'], ['last7', 'آخر 7 أيام'], ['month', 'هذا الشهر'], ['last30', 'آخر 30 يومًا'], ['custom', 'مخصص']];
   var P_WORKDAY = ['يوم دوام واحد', 'يوما دوام', 'أيام دوام', 'يوم دوام', 'يومي دوام'];
+  /** «X من Y» for a school: reports on expected days only (never more than Y); others are counted apart. */
+  function daysText(s) {
+    var on = isNum(s.onTimeDays) ? s.onTimeDays : s.submittedDays, extra = isNum(s.extraDays) ? s.extraDays : 0;
+    if (!s.expectedDays) return s.submittedDays ? plural(s.submittedDays, P_REPORT) : '0 من 0';
+    return on + ' من ' + s.expectedDays + (extra > 0 ? ' + ' + extra + ' خارج الأيام المتوقعة' : '');
+  }
+  function onTimeOf(x) { return isNum(x.onTime) ? x.onTime : x.submitted; }
+
   var Stats = {
     mount: function (el) {
       setHtml(el, html`<div class="ad-pagehead">
@@ -2931,7 +3039,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       });
       var cell = function (s, k) {
         var v = s[k];
-        if (k === 'compliancePct') return html`<td class="num"><span class="ad-pct ${pctCls(v, 80, 'below')}">${pct(v)}</span><div class="text-xs text-muted">${s.submittedDays} من ${s.expectedDays}</div></td>`;
+        if (k === 'compliancePct') return html`<td class="num"><span class="ad-pct ${pctCls(v, 80, 'below')}">${pct(v)}</span><div class="text-xs text-muted">${daysText(s)}</div></td>`;
         if (k === 'avgStudentAbsencePct') return html`<td class="num"><span class="ad-pct ${pctCls(v, th.studentAbsencePct, 'danger')}">${pct(v)}</span></td>`;
         if (k === 'avgTeacherAbsencePct') return html`<td class="num"><span class="ad-pct ${pctCls(v, th.teacherAbsencePct, 'warn')}">${pct(v)}</span></td>`;
         if (k === 'avgActivationPct') return html`<td class="num"><span class="ad-pct ${pctCls(v, th.activationPct, 'below')}">${pct(v)}</span></td>`;
@@ -2949,6 +3057,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     },
     doc: function () {
       var d = S.stats.data;
+      var dt = daysText;
       if (!d) return;
       var t = d.totals || {}, c = Today.cols(), cols = Stats.cols();
       var k = [[pct(t.compliancePct), 'الالتزام بالتسليم']];
@@ -2958,14 +3067,14 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       k.push([num(t.reports || 0), 'عدد التقارير']);
       var days = (d.days || []).filter(function (x) { return x.isWorkday && x.expected > 0; });
       var schools = (d.schools || []).slice().sort(function (a, b) { return cmpName(a.name, b.name); });
-      var vcell = function (s, key) { return key === 'compliancePct' ? pct(s[key]) + ' (' + s.submittedDays + ' من ' + s.expectedDays + ')' : /Pct$/.test(key) ? pct(s[key]) : num(s[key] || 0); };
+      var vcell = function (s, key) { return key === 'compliancePct' ? pct(s[key]) + ' (' + dt(s) + ')' : /Pct$/.test(key) ? pct(s[key]) : num(s[key] || 0); };
       Docs.open('تقرير الإحصاءات', html`<article class="doc">
         ${Docs.head('تقرير الإحصاءات', 'من ' + A.date.full(d.from) + ' إلى ' + A.date.full(d.to), [['المشرف', supSig()], ['الجهة', sup().office], ['أيام الدوام', d.workdays], ['عدد التقارير', t.reports || 0]])}
         <section class="doc__section"><h2>المؤشرات العامة</h2><div class="doc__kpis">${k.map(function (x) { return html`<div><strong>${x[0]}</strong><span>${x[1]}</span></div>`; })}</div></section>
         <section class="doc__section"><h2>المدارس</h2><table class="doc__table"><thead><tr><th class="num">#</th>${cols.map(function (x) { return html`<th class="${x[0] === 'name' ? '' : 'num'}">${x[1]}</th>`; })}</tr></thead>
           <tbody>${schools.map(function (s, i) { return html`<tr><td class="num">${i + 1}</td><td>${s.name}</td>${cols.slice(1).map(function (x) { return html`<td class="num">${vcell(s, x[0])}</td>`; })}</tr>`; })}</tbody></table></section>
         ${days.length ? html`<section class="doc__section"><h2>المؤشرات اليومية</h2><table class="doc__table"><thead><tr><th>اليوم</th><th class="num">التسليم</th><th class="num">الالتزام</th>${c.students ? html`<th class="num">غياب الطلاب</th>` : ''}${c.teachers ? html`<th class="num">غياب المعلمين</th>` : ''}${c.lessons ? html`<th class="num">تفعيل الحصص</th>` : ''}<th class="num">متأخرة</th></tr></thead>
-          <tbody>${days.map(function (x) { return html`<tr><td>${dateShort(x.date)}</td><td class="num">${x.submitted} من ${x.expected}</td><td class="num">${pct(x.compliancePct)}</td>${c.students ? html`<td class="num">${pct(x.studentAbsencePct)}</td>` : ''}${c.teachers ? html`<td class="num">${pct(x.teacherAbsencePct)}</td>` : ''}${c.lessons ? html`<td class="num">${pct(x.activationPct)}</td>` : ''}<td class="num">${x.late || 0}</td></tr>`; })}</tbody></table></section>` : ''}
+          <tbody>${days.map(function (x) { return html`<tr><td>${dateShort(x.date)}</td><td class="num">${onTimeOf(x)} من ${x.expected}</td><td class="num">${pct(x.compliancePct)}</td>${c.students ? html`<td class="num">${pct(x.studentAbsencePct)}</td>` : ''}${c.teachers ? html`<td class="num">${pct(x.teacherAbsencePct)}</td>` : ''}${c.lessons ? html`<td class="num">${pct(x.activationPct)}</td>` : ''}<td class="num">${x.late || 0}</td></tr>`; })}</tbody></table></section>` : ''}
         ${Docs.sign([Docs.supSign(), ['الختم', '']])}
         ${Docs.foot()}
       </article>`);
@@ -2988,13 +3097,13 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       L.push(line(['الفترة', d.from, d.to]));
       L.push(line(['أيام الدوام', d.workdays, 'عدد التقارير', t.reports || 0]));
       L.push('');
-      var head = ['المدرسة', 'أيام التسليم', 'الأيام المتوقعة', 'الالتزام بالتسليم (٪)'];
+      var head = ['المدرسة', 'أيام التسليم', 'الأيام المتوقعة', 'الالتزام بالتسليم (٪)', 'تقارير إضافية'];
       var keys = cols.slice(2).map(function (x) { return x[0]; });
       cols.slice(2).forEach(function (x) { head.push(x[1] + (/Pct$/.test(x[0]) ? ' (٪)' : '')); });
       modeKeys.forEach(function (m) { head.push(m); });
       L.push(line(head));
       (d.schools || []).slice().sort(function (a, b) { return cmpName(a.name, b.name); }).forEach(function (s) {
-        var row = [s.name, s.submittedDays, s.expectedDays, s.compliancePct];
+        var row = [s.name, isNum(s.onTimeDays) ? s.onTimeDays : s.submittedDays, s.expectedDays, s.compliancePct, isNum(s.extraDays) ? s.extraDays : 0];
         keys.forEach(function (k) { row.push(s[k]); });
         modeKeys.forEach(function (m) { row.push((s.modes || {})[m] || 0); });
         L.push(line(row));
@@ -3003,7 +3112,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       var dh = ['التاريخ', 'اليوم', 'المدارس المرسلة', 'المتوقع', 'الالتزام (٪)', 'غياب الطلاب (٪)', 'غياب المعلمين (٪)', 'تفعيل الحصص (٪)', 'متأخرة'];
       L.push(line(dh));
       (d.days || []).filter(function (x) { return x.isWorkday && x.expected > 0; }).forEach(function (x) {
-        L.push(line([x.date, A.date.dayName(x.date), x.submitted, x.expected, x.compliancePct, x.studentAbsencePct, x.teacherAbsencePct, x.activationPct, x.late || 0]));
+        L.push(line([x.date, A.date.dayName(x.date), onTimeOf(x), x.expected, x.compliancePct, x.studentAbsencePct, x.teacherAbsencePct, x.activationPct, x.late || 0]));
       });
       return L.join('\r\n');
     },
@@ -3369,10 +3478,18 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       return html`<label class="switch ad-switchrow"><span>تفعيل مراجعة المشرف للتقارير<small>تصل التقارير بحالة «بانتظار المراجعة» لتعتمدها أو تعيدها للتصحيح. عند الإيقاف تُعتمد التقارير تلقائيًا فور إرسالها.</small></span><input type="checkbox" role="switch" id="st-review"${attr(on, 'checked')}></label>`;
     },
     g_links: function () {
-      var on = !!(S.settings.links && S.settings.links.generalEnabled), gl = S.settings.generalLink || generalLink();
+      var st = S.settings, on = !!(st.links && st.links.generalEnabled), gl = st.generalLink || generalLink();
+      var detected = st.detectedUrl && st.detectedUrl !== st.webAppUrl ? st.detectedUrl : '';
       return html`<div class="stack">
         <label class="switch ad-switchrow"><span>تفعيل الرابط العام لكل المدارس<small>رابط واحد يختار منه المدير مدرسته ويُدخل «رمز المدرسة». عند الإيقاف تعمل الروابط الخاصة فقط — وهي الأدق.</small></span><input type="checkbox" role="switch" id="st-general"${attr(on, 'checked')}></label>
         ${gl ? html`<div class="ad-linkbox"><span class="ad-linkbox__url">${gl}</span><button type="button" class="btn btn-ghost btn-sm" data-action="general-copy">${icon('copy')}<span>نسخ</span></button></div>` : ''}
+        <div class="field ad-urlfield">
+          <label class="field__label" for="st-weburl">رابط تطبيق الويب (ينتهي بـ ⁦/exec⁩)</label>
+          <input id="st-weburl" class="input" type="url" inputmode="url" dir="ltr" autocomplete="off" spellcheck="false" maxlength="300" value="${st.webAppUrl || ''}" placeholder="https://script.google.com/macros/s/…/exec">
+          ${fieldError('st-weburl-err')}
+          <p class="field__hint">منه تُبنى روابط المدارس والرابط العام. يُحفظ تلقائيًا عند فتح اللوحة من رابط النشر؛ غيّره فقط إذا أنشأت «نشرًا جديدًا» برابط مختلف (انسخه من «نشر» ← «إدارة عمليات النشر»).</p>
+          ${detected ? html`<div class="row mt-1"><span class="text-xs text-muted">الرابط الذي فتحت منه اللوحة الآن: <bdi dir="ltr">${detected}</bdi></span><button type="button" class="btn btn-ghost btn-sm" data-action="use-detected-url" data-url="${detected}">استخدام هذا الرابط</button></div>` : ''}
+        </div>
       </div>`;
     },
     g_schedule: function () {
@@ -3383,6 +3500,12 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
           <div class="choice-group ad-wd" role="group" aria-labelledby="st-wd-l" id="st-wd">${[0, 1, 2, 3, 4, 5, 6].map(function (i) { return html`<button type="button" class="choice" data-action="toggle-wd" data-day="${i}" aria-pressed="${wd.indexOf(i) >= 0}">${A.date.dayNames[i]}</button>`; })}</div>
           ${fieldError('st-wd-err')}</div>
         <label class="switch ad-switchrow"><span>السماح بالإرسال بعد الموعد<small>يُقبل التقرير ويُعلَّم «متأخر». عند الإيقاف يُغلق النموذج بعد الموعد لمن لم يرسل.</small></span><input type="checkbox" role="switch" id="st-late"${attr(!!sc.allowLate, 'checked')}></label>
+        <div class="field">
+          <label class="field__label" for="st-backfill">السماح بإرسال تقارير الأيام الفائتة حتى</label>
+          <div class="ad-unit ad-unit--wide"><input id="st-backfill" class="input" type="number" inputmode="numeric" min="0" max="7" step="1" value="${isNum(sc.backfillDays) ? sc.backfillDays : 2}" aria-describedby="st-backfill-hint"><span class="ad-unit__suffix" aria-hidden="true">أيام عمل</span></div>
+          ${fieldError('st-backfill-err')}
+          <p class="field__hint" id="st-backfill-hint">إذا نسيت مدرسة إرسال تقرير يوم دوام، تستطيع إرساله لاحقًا خلال هذه المدة (يُسجَّل «متأخرًا»). 0 = غير مسموح.</p>
+        </div>
       </div>`;
     },
     g_alerts: function () {
@@ -3453,7 +3576,8 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       return html`<div class="stack">
         <label class="switch ad-switchrow"><span>إرسال ملخص يومي إلى بريدي<small>يصلك في أيام الدوام: من أرسل ومن لم يرسل، وما ينتظر مراجعتك، والتنبيهات.</small></span><input type="checkbox" role="switch" id="st-digest"${attr(!!dg.enabled, 'checked')}></label>
         <div class="grid-2">
-          <div class="field"><label class="field__label" for="st-digest-time">وقت الإرسال</label><input type="time" id="st-digest-time" class="input" value="${dg.time || '10:00'}" step="300">${fieldError('st-digest-time-err')}</div>
+          <div class="field"><label class="field__label" for="st-digest-time">وقت الإرسال</label><input type="time" id="st-digest-time" class="input" value="${dg.time || '10:00'}" step="300">${fieldError('st-digest-time-err')}
+            <small class="field__hint">قد يصل قبل الوقت المختار أو بعده بربع ساعة تقريبًا (توقيت Google). لمعرفة من تأخّر، اختر وقتًا بعد الموعد النهائي بـ 20 دقيقة على الأقل.</small></div>
           <div class="field"><span class="field__label">إلى البريد</span><div class="ad-emailbox">${icon('mail')}<span class="ad-emailbox__val ltr" dir="ltr">${S.settings.ownerEmail || BOOT.status.ownerEmailMasked || '—'}</span></div></div>
         </div>
       </div>`;
@@ -3468,6 +3592,10 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
           ${s.photosFolderUrl ? html`<a class="btn btn-secondary" href="${s.photosFolderUrl}" target="_blank" rel="noopener">${icon('folder')}<span>فتح مجلد الشواهد (Google Drive)</span></a>` : html`<button type="button" class="btn btn-secondary" disabled>${icon('folder')}<span>فتح مجلد الشواهد (Google Drive)</span></button>`}
         </div>
         ${!s.photosFolderUrl ? html`<p class="field__hint">يُنشأ مجلد الشواهد تلقائيًا مع أول صورة ترفعها مدرسة.</p>` : ''}
+        ${s.storage && s.storage.limit > 0 ? html`<div class="ad-storage">
+          <span class="ad-storage__text">مساحة Google Drive في حسابك: ${gb(s.storage.used)} من ${gb(s.storage.limit)} جيجابايت (مشتركة مع Gmail والصور)</span>
+          <div class="progress ${s.storage.used / s.storage.limit >= 0.85 ? 'progress--warn' : 'progress--ok'}" role="progressbar" aria-label="مساحة Google Drive المستخدمة" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(s.storage.used / s.storage.limit * 100)}"><div class="progress__bar" style="width:${Math.min(100, Math.round(s.storage.used / s.storage.limit * 100))}%"></div></div>
+        </div>` : ''}
       </div>`;
     },
     g_security: function () {
@@ -3494,8 +3622,8 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       var n = function (id) { var d = digits(v(id)); return d === '' ? null : parseInt(d, 10); };
       if (k === 'general') return { systemTitle: v('st-title').replace(/\s+/g, ' ').trim(), supervisor: { name: v('st-name').replace(/\s+/g, ' ').trim(), title: v('st-stitle').replace(/\s+/g, ' ').trim(), office: v('st-office').replace(/\s+/g, ' ').trim(), phone: A.latinDigits(v('st-phone')).replace(/[\s-]/g, '') } };
       if (k === 'review') return { review: { enabled: c('st-review') } };
-      if (k === 'links') return { links: { generalEnabled: c('st-general') } };
-      if (k === 'schedule') return { schedule: { deadline: v('st-deadline'), workdays: $$('#st-wd [data-day]').filter(function (b) { return b.getAttribute('aria-pressed') === 'true'; }).map(function (b) { return +b.getAttribute('data-day'); }), allowLate: c('st-late') } };
+      if (k === 'links') return { links: { generalEnabled: c('st-general') }, webAppUrl: v('st-weburl').trim() };
+      if (k === 'schedule') return { schedule: { deadline: v('st-deadline'), workdays: $$('#st-wd [data-day]').filter(function (b) { return b.getAttribute('aria-pressed') === 'true'; }).map(function (b) { return +b.getAttribute('data-day'); }), allowLate: c('st-late'), backfillDays: n('st-backfill') } };
       if (k === 'alerts') return { alerts: { studentAbsencePct: n('st-a-stu'), teacherAbsencePct: n('st-a-tea'), activationPct: n('st-a-act'), jumpPct: n('st-a-jump') } };
       if (k === 'messages') return { messageTemplate: v('st-msg'), returnTemplate: v('st-ret') };
       if (k === 'holidays') return { holidays: (S.setDraft.holidays || []).slice().sort() };
@@ -3506,8 +3634,8 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       var s = S.settings || {}, su = s.supervisor || {}, sc = s.schedule || {}, a = s.alerts || {}, dg = s.digest || {};
       if (k === 'general') return { systemTitle: s.systemTitle || '', supervisor: { name: su.name || '', title: su.title || '', office: su.office || '', phone: su.phone || '' } };
       if (k === 'review') return { review: { enabled: !!(s.review && s.review.enabled) } };
-      if (k === 'links') return { links: { generalEnabled: !!(s.links && s.links.generalEnabled) } };
-      if (k === 'schedule') return { schedule: { deadline: sc.deadline || '', workdays: (sc.workdays || []).slice().sort(), allowLate: !!sc.allowLate } };
+      if (k === 'links') return { links: { generalEnabled: !!(s.links && s.links.generalEnabled) }, webAppUrl: s.webAppUrl || '' };
+      if (k === 'schedule') return { schedule: { deadline: sc.deadline || '', workdays: (sc.workdays || []).slice().sort(), allowLate: !!sc.allowLate, backfillDays: isNum(sc.backfillDays) ? sc.backfillDays : 2 } };
       if (k === 'alerts') return { alerts: { studentAbsencePct: a.studentAbsencePct, teacherAbsencePct: a.teacherAbsencePct, activationPct: a.activationPct, jumpPct: a.jumpPct } };
       if (k === 'messages') return { messageTemplate: s.messageTemplate || '', returnTemplate: s.returnTemplate || '' };
       if (k === 'holidays') return { holidays: (s.holidays || []).slice().sort() };
@@ -3538,6 +3666,10 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       if (k === 'schedule') {
         if (!/^\d{2}:\d{2}$/.test(p.schedule.deadline)) err('st-deadline', 'اختر وقتًا صحيحًا مثل 09:00.');
         if (!p.schedule.workdays.length) err('st-wd', 'اختر يوم دوام واحدًا على الأقل.');
+        if (!(isNum(p.schedule.backfillDays) && p.schedule.backfillDays >= 0 && p.schedule.backfillDays <= 7)) err('st-backfill', 'اكتب رقمًا من 0 إلى 7.');
+      }
+      if (k === 'links' && p.webAppUrl && !/^https:\/\/script\.google\.com\/(?:a\/macros\/[^\/?#\s]+|macros)\/s\/[\w-]+\/exec(?:[?#].*)?$/.test(p.webAppUrl)) {
+        err('st-weburl', /\/dev(?:[?#].*)?$/.test(p.webAppUrl) ? 'هذا رابط النسخة التجريبية (⁦/dev⁩) ولا يعمل لدى المدارس — انسخ رابط النشر المنتهي بـ ⁦/exec⁩.' : 'الرابط يبدأ بـ https://script.google.com/ وينتهي بـ ⁦/exec⁩.');
       }
       if (k === 'alerts') {
         var a = p.alerts;
@@ -3557,11 +3689,19 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
         var s = S.settings;
         if (k === 'messages') { s.messageTemplate = p.messageTemplate.trim() || DEFAULT_MSG; s.returnTemplate = p.returnTemplate.trim() || DEFAULT_RET; byId('st-msg').value = s.messageTemplate; byId('st-ret').value = s.returnTemplate; }
         else Object.keys(p).forEach(function (key) { s[key] = clone(p[key]); });
+        if (k === 'links') {   // links are rebuilt from the saved URL: refresh everything that shows one
+          s.webAppUrl = (p.webAppUrl || '').split('#')[0].split('?')[0];
+          byId('st-weburl').value = s.webAppUrl;
+          S.boot = null; S.bootPromise = null; S.schoolsMeta = null; S.dayFetchedAt = 0;
+          loadBoot().catch(quiet);
+          loadSchools().catch(quiet);
+          loadSettings(true).then(function () { if (S.view === 'settings') { var c = byId('set-links'); if (c) setHtml($('.card__body', c), Settings.g_links()); Settings.check(c); } }, quiet);
+        }
         if (S.boot) ['systemTitle', 'supervisor', 'schedule', 'review', 'links', 'alerts', 'digest'].forEach(function (key) { if (key in p) S.boot[key] = clone(p[key]); });
         if (k === 'general') { BOOT.systemTitle = p.systemTitle; BOOT.status.supervisorName = p.supervisor.name; Shell.texts(); }
         if (['review', 'schedule', 'alerts', 'holidays'].indexOf(k) >= 0) { S.dayFetchedAt = 0; S.stats.key = ''; }
         Settings.check(byId('set-' + k));
-        var extra = k === 'review' && !p.review.enabled ? ' — التقارير الجديدة ستُعتمد تلقائيًا' : k === 'digest' && p.digest.enabled ? ' — سيصلك الملخص يوميًا الساعة ' + A.time.fmt(p.digest.time) : '';
+        var extra = k === 'review' && !p.review.enabled ? ' — التقارير الجديدة ستُعتمد تلقائيًا' : k === 'digest' && p.digest.enabled ? ' — سيصلك الملخص يوميًا نحو الساعة ' + A.time.fmt(p.digest.time) : '';
         A.toast('تم حفظ «' + g.t + '»' + extra);
       }, function (e) { fail(e); Settings.check(byId('set-' + k)); });
     },
@@ -3659,7 +3799,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       Today.go(v);
     },
     'pick-quick': function (el) { closeTopModal(); Today.go(el.getAttribute('data-date')); },
-    'day-refresh': function () { if (!S.dayLoading) Today.load(S.day ? S.day.date : S.dayDate, { silent: !!S.day }); },
+    'day-refresh': function () { if (!S.dayLoading) Today.load(reloadDate(), { silent: !!S.day }); },
     'day-retry': function () { Today.load(S.dayDate); },
     'print-day': function () { Docs.day(); },
     'share-day': function () { openShare(); },
@@ -3684,12 +3824,18 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     'rd-delete': function (el) {
       var c = RD.cur, row = c && Today.row(c.date, c.id);
       if (!row) return;
-      return A.confirm({ title: 'حذف التقرير؟', text: 'سيُحذف تقرير «' + row.school.name + '» ليوم ' + dateShort(c.date) + ' نهائيًا، وتستطيع المدرسة إرساله من جديد. الصور تبقى في مجلد الشواهد.', okText: 'حذف التقرير', danger: true }).then(function (ok) {
+      // Only promise a resend when that day is still open to the school (today, or inside the late window).
+      var d = S.day, canResend = !!(d && d.date === c.date && d.canSubmit !== false);
+      var text = 'سيُحذف تقرير «' + row.school.name + '» ليوم ' + dateShort(c.date) + ' نهائيًا' + (canResend
+        ? '، وتستطيع المدرسة إرساله من جديد.'
+        : '، ولن تتمكن المدرسة من إرساله لهذا اليوم مرة أخرى — سيُحسب اليوم «لم يُرسل». إن أردت أن تصحّحه المدرسة فاستخدم «إعادة للتصحيح» بدلًا من الحذف.') +
+        ' الصور تبقى في مجلد الشواهد.';
+      return A.confirm({ title: 'حذف التقرير؟', text: text, okText: 'حذف التقرير', danger: true }).then(function (ok) {
         if (!ok) return;
         return A.busy(el, auth('api_deleteReport', c.date, c.id)).then(function () {
           c.modal.close('action');
           Today.applyReport(c.date, c.id, null);
-          A.toast('حُذف التقرير — تستطيع المدرسة إرساله من جديد');
+          A.toast(canResend ? 'حُذف التقرير — تستطيع المدرسة إرساله من جديد' : 'حُذف التقرير');
         }, fail);
       });
     },
@@ -3707,7 +3853,7 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     remind: function (el) { remindSchool(el.getAttribute('data-id')); },
     'copy-link': function (el) { copySchoolLink(el.getAttribute('data-id')); },
     'general-reminder': function () {
-      if (!S.day) return;
+      if (!S.day || S.day.canSubmit === false) return;
       A.copy(generalReminderText(S.day)).then(function (ok) { if (ok) A.toast('نُسخت رسالة التذكير — الصقها في مجموعة المديرين'); });
     },
     'goto-date': function (el) {
@@ -3730,6 +3876,14 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
     'alerts-toggle': function () { S.alertsAll = !S.alertsAll; Today.paint(); },
     'miss-toggle': function () { S.missAll = !S.missAll; Today.paint(); },
     'po-toggle': function () { S.poAll = !S.poAll; Today.paint(); },
+    'ro-toggle': function () { S.roAll = !S.roAll; Today.paint(); },
+    'show-pending': function () {
+      S.filter = 'pending';
+      Today.paintFilter();
+      Today.paintList();
+      var el = byId('td-reports');
+      if (el) { try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { el.scrollIntoView(); } }
+    },
     /* schools */
     'schools-retry': function () { go('schools', { force: true }); },
     'school-add': function () { SchoolEdit.open(null); },
@@ -3847,6 +4001,13 @@ th[aria-sort="ascending"] .ad-sort svg, th[aria-sort="descending"] .ad-sort svg 
       if (!ta || !TPL_DEFAULTS[id]) return;
       ta.value = TPL_DEFAULTS[id];
       ta.dispatchEvent(new Event('input', { bubbles: true }));
+    },
+    'use-detected-url': function (el) {
+      var inp = byId('st-weburl'), u = el.getAttribute('data-url');
+      if (!inp || !u) return;
+      inp.value = u;
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.focus();
     },
     'holiday-add': function () { Settings.addHoliday(); },
     'holiday-del': function (el) { Settings.delHoliday(el.getAttribute('data-date')); },

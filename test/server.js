@@ -35,6 +35,12 @@ const { createGasEnv } = require('./gas-mock.js');
 const { loadApp } = require('./runtime.js');
 
 const DEFAULT_SRC = path.join(__dirname, '..', 'src');
+/**
+ * The deployment URL ScriptApp reports in the dev server. The app only accepts real deployment URLs
+ * (https://script.google.com/…/exec) as the base of school links, so the server uses this stand-in and
+ * the page shim sends any link to it back to the local server.
+ */
+const DEV_DEPLOY_URL = 'https://script.google.com/macros/s/AKfycbLocalDevServer/exec';
 const MAX_BODY = 30 * 1024 * 1024;
 
 /* ---------------------------------------------------------------- the browser shim (stringified) */
@@ -138,6 +144,12 @@ function gasShim(CFG) {
     var href = a.getAttribute('href') || '';
     if (!href || href.charAt(0) === '#' || /^(javascript|mailto|tel|sms|blob|data):/i.test(href) || a.hasAttribute('download')) return;
     var target = (a.getAttribute('target') || '').toLowerCase();
+    if (CFG.deployUrl && href.indexOf(CFG.deployUrl) === 0) {   // a school / preview link → this local server
+      ev.preventDefault();
+      var local = CFG.localUrl + href.slice(CFG.deployUrl.length).replace(/^\//, '');
+      if (target === '_blank') window.open(local, '_blank'); else location.href = local;
+      return;
+    }
     if (target === '_blank' || target === '_top') return;
     ev.preventDefault();
     console.error('[gas-sandbox] Blocked navigation: <a href="' + href + '"> has no target="_blank" or "_top"; inside the Apps Script iframe this link would not work.');
@@ -203,7 +215,7 @@ function startServer(opts = {}) {
   function makeEnv(o = {}) {
     const envOpts = Object.assign({}, baseEnvOptions, o.envOptions || {});
     envOpts.ownerEmail = o.ownerEmail || envOpts.ownerEmail || opts.ownerEmail || 'supervisor@gmail.com';
-    envOpts.scriptUrl = (o.notDeployed || opts.notDeployed) ? null : (o.scriptUrl || envOpts.scriptUrl || opts.scriptUrl || state.url);
+    envOpts.scriptUrl = (o.notDeployed || opts.notDeployed) ? null : (o.scriptUrl || envOpts.scriptUrl || opts.scriptUrl || DEV_DEPLOY_URL);
     const clk = o.clock !== undefined ? o.clock : opts.clock;
     if (clk !== undefined && clk !== null) envOpts.clock = clk; else delete envOpts.clock;
     const env = createGasEnv(envOpts);
@@ -227,7 +239,8 @@ function startServer(opts = {}) {
         let out;
         try { out = state.app.doGetOutput(parameters); }
         catch (e) { log('[doGet] ' + (e.serverStack || e.stack)); return send(res, 500, errorPage(e), 'text/html; charset=utf-8'); }
-        const cfg = { fns: state.app.publicFunctions(), parameter, parameters, hash: '', qs, rewrite: state.rewrite, rpc: '/__rpc' };
+        const cfg = { fns: state.app.publicFunctions(), parameter, parameters, hash: '', qs, rewrite: state.rewrite, rpc: '/__rpc',
+          deployUrl: state.env.scriptUrl || '', localUrl: state.url };
         send(res, 200, injectShim(out, cfg), 'text/html; charset=utf-8');
         log(`GET ${req.url} → 200 (${Date.now() - t0} ms)`);
         return;
@@ -337,7 +350,7 @@ function startServer(opts = {}) {
       state.url = `http://localhost:${state.port}/`;
       try {
         if (!state.env) state.env = makeEnv({});
-        else if (state.env.scriptUrl === undefined) state.env.setScriptUrl(state.url);
+        else if (state.env.scriptUrl === undefined) state.env.setScriptUrl(DEV_DEPLOY_URL);
         if (!state.app) state.app = makeApp(state.env);
       } catch (e) { server.close(); reject(e); return; }
       const sockets = new Set();
@@ -358,7 +371,7 @@ function startServer(opts = {}) {
   });
 }
 
-module.exports = { startServer, gasShim, injectShim };
+module.exports = { startServer, gasShim, injectShim, DEV_DEPLOY_URL };
 
 /* ---------------------------------------------------------------- CLI */
 if (require.main === module) {

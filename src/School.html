@@ -143,7 +143,8 @@
   .sc-receipt__badges { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 12px; }
   .sc-receipt__meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 16px; margin: 10px 0 0; font-size: 13.5px; color: var(--muted); }
   .sc-receipt__meta b { color: var(--text-2); font-weight: 600; }
-  .sc-receipt__body { display: grid; gap: 18px; padding: 20px 16px 18px; }
+  /* minmax(0,1fr): a wide table scrolls inside .table-wrap instead of widening (and clipping) the whole receipt */
+  .sc-receipt__body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 20px 16px 18px; }
   .sc-sec-title { margin: 0 0 8px; font-size: 13px; font-weight: 700; color: var(--muted); }
   .sc-kv { margin: 0; }
   .sc-kv > div { display: flex; align-items: baseline; justify-content: space-between; gap: 6px 16px; padding: 10px 0; border-top: 1px solid var(--border); }
@@ -159,6 +160,10 @@
   .sc-stat--ok b { color: var(--ok-700); }
   .sc-att-sum .table th, .sc-att-sum .table td { padding: 9px 10px; }
   .sc-att-sum .table tbody th { min-width: 0; }
+  @media (max-width: 400px) {
+    .sc-att-sum .table th, .sc-att-sum .table td { padding: 8px 7px; }
+    .sc-att-sum .table thead th { white-space: normal; line-height: 1.35; }
+  }
   .sc-receipt__foot { display: grid; gap: 10px; padding: 14px 16px 18px; border-top: 1px solid var(--border); background: #FAFBFB; }
   .sc-receipt__foot .row { gap: 10px; }
   .sc-receipt__foot .row > .btn { flex: 1 1 160px; }
@@ -225,6 +230,26 @@
   .sc-suggest { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
   .sc-suggest__chip { border: 0; cursor: pointer; min-height: 34px; padding: 2px 12px; font-size: 13.5px; font-family: inherit; max-width: 100%; white-space: normal; text-align: start; }
   .sc-suggest__chip:hover { background: var(--primary-100); }
+  @media (pointer: coarse) { .sc-suggest__chip { min-height: 40px; } }
+
+  /* Missed days (late reports) */
+  .card.sc-bf { padding: 0; overflow: hidden; }
+  .sc-bf__toggle { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 54px; padding: 10px 16px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 15px; font-weight: 700; text-align: start; cursor: pointer; }
+  .sc-bf__toggle:hover { background: #F7FAFA; }
+  .sc-bf__toggle:focus-visible { outline-offset: -3px; }
+  .sc-bf__toggle > svg { width: 20px; height: 20px; flex: none; color: var(--warn-700); }
+  .sc-bf__toggle > svg:last-child { color: var(--muted); transition: transform .2s var(--ease); }
+  .sc-bf.is-open .sc-bf__toggle > svg:last-child { transform: rotate(180deg); }
+  .sc-bf__q { flex: 1 1 auto; min-width: 0; }
+  .sc-bf__body { padding: 0 16px 14px; display: grid; gap: 10px; }
+  .sc-bf__body[hidden] { display: none; }
+  .sc-bf__hint { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--text-2); }
+  .sc-bf__days { display: grid; gap: 8px; }
+  .sc-bf__day { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name icon" "greg icon"; align-items: center; column-gap: 10px; width: 100%; min-height: 56px; padding: 9px 14px; border: 1.5px solid var(--border-strong); border-radius: 14px; background: var(--surface); color: var(--text); font: inherit; text-align: start; cursor: pointer; transition: border-color var(--dur) ease, background-color var(--dur) ease; }
+  .sc-bf__day:hover { border-color: var(--primary); background: var(--primary-50); }
+  .sc-bf__name { grid-area: name; font-size: 15px; font-weight: 700; line-height: 1.45; }
+  .sc-bf__greg { grid-area: greg; font-size: 13px; color: var(--muted); line-height: 1.45; }
+  .sc-bf__day > svg { grid-area: icon; width: 20px; height: 20px; color: var(--primary); }
   .sc-shake { animation: sc-shake .36s ease; }
   @keyframes sc-shake { 0%, 100% { transform: none; } 20% { transform: translateX(-6px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(3px); } }
   .sc-flash { animation: sc-flash 1.2s ease; }
@@ -320,6 +345,7 @@
       draftRestored: false,
       justSent: false,
       showAllReturned: false,
+      backfillOpen: false,
       clock: { server: 0, client: Date.now() }
     };
     var photoUrlCache = {};    // drive file id → displayable url (blob:/data:)
@@ -541,21 +567,36 @@
     }
 
     /* ------------------------------------------------------- date strip */
+    /** Today's deadline has passed on this page's (server-synced) clock. */
+    function deadlinePassedNow() {
+      var dlMin = hhmmToMin(S.form && S.form.deadline);
+      return dlMin !== null && nowMin() > dlMin;
+    }
+    function isOffday() { return !!(S.form && (!S.form.isWorkday || S.form.isHoliday)); }
+    /** Late submissions are off and the deadline passed while this (new, not yet sent) form was open. */
+    function closedNow() {
+      var f = S.form;
+      return !!(f && !isPreview() && f.allowLate === false && f.state === 'open' && !f.existing && !isOffday() && deadlinePassedNow());
+    }
     function deadlineChipHtml() {
       var f = S.form;
       var dl = App.time.fmt(f.deadline);
       if (S.correcting && f.state === 'correction') return html`<span class="chip chip--warn">${icon('undo')}<span>تصحيح تقرير سابق</span></span>`;
+      if (f.state === 'backfill' && !f.existing) return html`<span class="chip chip--warn">${icon('calendar')}<span>تقرير يوم فائت — يُسجَّل متأخرًا</span></span>`;
       if (f.existing && !S.editing && !isPreview()) return App.status.badge(f.existing.status);
       if (S.editing && f.existing) {
         if (f.existing.status === 'returned') return html`<span class="chip chip--warn">${icon('undo')}<span>تصحيح التقرير</span></span>`;
         return html`<span class="chip chip--info">${icon('edit')}<span>تعديل تقرير مُرسل</span></span>`;
       }
-      if ((!f.isWorkday || f.isHoliday) && !isPreview() && !S.offdayOverride) {
+      if (isOffday() && !isPreview() && !S.offdayOverride) {
         return html`<span class="chip">${icon('calendar')}<span>${f.isHoliday ? 'يوم إجازة' : 'ليس يوم دوام'}</span></span>`;
       }
       if (f.state === 'closed') return html`<span class="chip chip--danger">${icon('lock')}<span>انتهى وقت الإرسال</span></span>`;
+      // No deadline on an off day (holiday / weekend): a report sent anyway is never late.
+      if (isOffday()) return html`<span class="chip" id="sc-dl">${icon('calendar')}<span>${f.isHoliday ? 'يوم إجازة' : 'ليس يوم دوام'} — لا يوجد موعد نهائي</span></span>`;
       var dlMin = hhmmToMin(f.deadline);
-      var past = f.state === 'late' || (dlMin !== null && nowMin() > dlMin);
+      var past = f.state === 'late' || deadlinePassedNow();
+      if (past && f.allowLate === false && f.state !== 'late') return html`<span class="chip chip--danger" id="sc-dl">${icon('lock')}<span>انتهى وقت الإرسال</span></span>`;
       if (past) return html`<span class="chip chip--warn" id="sc-dl">${icon('alert')}<span>تجاوزت الموعد — سيُسجَّل التقرير متأخرًا</span></span>`;
       var left = dlMin !== null ? dlMin - nowMin() : null;
       var soon = left !== null && left >= 0 && left <= 60 ? ' • بعد ' + (left < 1 ? 'أقل من دقيقة' : minutesWord(left)) : '';
@@ -567,7 +608,7 @@
         <span class="sc-date__icon" aria-hidden="true">${icon('calendar')}</span>
         <div>
           <div class="sc-date__day">${App.date.dayName(d)} <span class="fw-500">${App.date.hijri(d)}</span></div>
-          <div class="sc-date__sub">${App.date.greg(d)}${S.form.state === 'correction' ? ' • تقرير يوم سابق' : ''}</div>
+          <div class="sc-date__sub">${App.date.greg(d)}${S.form.state === 'correction' ? ' • تقرير يوم سابق' : (S.form.state === 'backfill' ? ' • تقرير يوم فائت' : '')}</div>
         </div>
         <div class="sc-date__chip" id="sc-chip">${deadlineChipHtml()}</div>
       </section>`;
@@ -596,6 +637,28 @@
         ? html`<button type="button" class="btn btn-ghost btn-sm sc-more" data-action="more-returned">${icon('chevron-down')}<span>عرض باقي التقارير المعادة (${list.length - shown.length})</span></button>`
         : '';
       return html`${items}${more}`;
+    }
+
+    /** «لم ترسل تقرير يوم سابق؟» — missed workdays the school may still report (late), newest first. */
+    function backfillHtml() {
+      var f = S.form;
+      if (!f || !f.ok || isPreview() || S.correcting || S.editing || f.state === 'backfill' || f.state === 'correction') return '';
+      var days = (Array.isArray(f.missingDays) ? f.missingDays : []).filter(function (d) { return App.date.isISO(d); });
+      if (!days.length) return '';
+      var open = S.backfillOpen;
+      return html`<section class="card sc-bf${open ? ' is-open' : ''}" id="sc-bf">
+        <button type="button" class="sc-bf__toggle" data-action="bf-toggle" aria-expanded="${open ? 'true' : 'false'}" aria-controls="sc-bf-list">
+          ${icon('calendar')}<span class="sc-bf__q">لم ترسل تقرير يوم سابق؟</span><span class="badge badge--warn">${days.length}</span>${icon('chevron-down')}
+        </button>
+        <div class="sc-bf__body" id="sc-bf-list"${open ? '' : App.raw(' hidden')}>
+          <p class="sc-bf__hint">يمكنك إرسال تقرير ${days.length === 1 ? 'هذا اليوم' : 'أحد هذه الأيام'} الآن، ويُسجَّل «متأخرًا».</p>
+          <div class="sc-bf__days">${days.map(function (d) {
+            return html`<button type="button" class="sc-bf__day" data-action="backfill" data-date="${d}" aria-label="${'إرسال تقرير يوم ' + App.date.dayName(d) + ' ' + App.date.greg(d)}">
+              <span class="sc-bf__name">${App.date.dayName(d)} <span class="fw-500">${App.date.hijri(d, { withYear: false })}</span></span>
+              <span class="sc-bf__greg">${App.date.greg(d)}</span>${icon('chevron-left')}</button>`;
+          })}</div>
+        </div>
+      </section>`;
     }
 
     function topAlertsHtml() {
@@ -776,6 +839,17 @@
           <div class="alert__actions"><button type="button" class="btn btn-secondary btn-sm" data-action="cancel-edit">${icon('chevron-right')}<span>${f.state === 'correction' ? 'العودة إلى تقرير اليوم' : 'إلغاء'}</span></button></div>
         </div></div>`;
       }
+      if (f.state === 'backfill' && !f.existing) {
+        return html`<div class="alert alert--warn" id="sc-bf-note">${icon('calendar')}<div>
+          <strong class="alert__title">تقرير يوم ${dayLabel(f.date)}</strong>
+          <span class="text-sm">أنت ترسل تقرير يوم فائت (${App.date.greg(f.date)})، ويُسجَّل «متأخرًا». اكتب بيانات ذلك اليوم.</span>
+          ${S.draftRestored ? html`<p class="text-sm mt-1">استعدنا ما كتبته سابقًا لهذا اليوم.</p>` : ''}
+          <div class="alert__actions">
+            <button type="button" class="btn btn-secondary btn-sm" data-action="cancel-edit">${icon('chevron-right')}<span>العودة إلى تقرير اليوم</span></button>
+            ${S.draftRestored ? html`<button type="button" class="btn btn-ghost btn-sm" data-action="draft-reset">${icon('trash')}<span>البدء من جديد</span></button>` : ''}
+          </div>
+        </div></div>`;
+      }
       if (S.editing && f.existing) {
         return html`<div class="alert alert--info">${icon('edit')}<div>
           <strong class="alert__title">أنت تعدّل تقريرًا مُرسلًا</strong>
@@ -823,6 +897,7 @@
     }
     function submitLabel() {
       if (S.correcting) return 'إرسال التصحيح';
+      if (S.form.state === 'backfill' && !S.form.existing) return 'إرسال تقرير يوم ' + App.date.dayName(S.form.date);
       if (S.editing && S.form.existing) return 'إرسال التعديل';
       return 'إرسال التقرير';
     }
@@ -944,7 +1019,7 @@
 
       var actions = [];
       var note = '';
-      var pastCorrection = f.state === 'correction';
+      var pastCorrection = f.state === 'correction' || f.state === 'backfill';
       if (st !== 'returned') {
         if (f.canEdit && !pastCorrection) actions.push(html`<button type="button" class="btn btn-secondary" data-action="edit">${icon('edit')}<span>تعديل التقرير</span></button>`);
         actions.push(html`<button type="button" class="btn btn-ghost" data-action="copy-receipt">${icon('copy')}<span>نسخ الإيصال</span></button>`);
@@ -1012,7 +1087,7 @@
       else if (S.view === 'error') main = errorHtml(S.viewError);
       else if (S.view === 'picker') main = pickerHtml();
       else {
-        var parts = [dateCardHtml(), topAlertsHtml(), returnedBannersHtml()];
+        var parts = [dateCardHtml(), topAlertsHtml(), returnedBannersHtml(), backfillHtml()];
         if (S.view === 'receipt') parts.push(receiptHtml());
         else if (S.view === 'closed') parts.push(closedHtml());
         else if (S.view === 'offday') parts.push(offdayHtml());
@@ -1036,8 +1111,8 @@
       var f = S.form;
       if (S.editing) return 'form';
       if (f.existing && !f.preview) return 'receipt';
+      if ((!f.isWorkday || f.isHoliday) && !f.preview && !S.offdayOverride) return 'offday';   // before «closed»: nothing is due today
       if (f.state === 'closed') return 'closed';
-      if ((!f.isWorkday || f.isHoliday) && !f.preview && !S.offdayOverride) return 'offday';
       return 'form';
     }
 
@@ -1545,7 +1620,9 @@
       it.status = 'compressing';
       it.progress = 0.08;
       var token = S.token;
-      var compress = it.payload ? Promise.resolve(it.payload) : App.image.compress(it.file, { maxSide: 1600, quality: 0.82, maxBytes: 3 * 1024 * 1024 });
+      // 1280 px at q≈0.72 (≈150–250 KB) keeps evidence sharp on screen and in print while the
+      // supervisor's own Drive (15 GB shared with Gmail) lasts for years.
+      var compress = it.payload ? Promise.resolve(it.payload) : App.image.compress(it.file, { maxSide: 1280, quality: 0.72, maxBytes: 3 * 1024 * 1024 });
       return compress.then(function (payload) {
         if (it.removed) return null;
         it.payload = payload;
@@ -1700,9 +1777,46 @@
       Object.keys(S.photos).forEach(function (fid) { (S.photos[fid] || []).forEach(function (it) { if (it.status === 'error') n++; }); });
       return n;
     }
+    /* ---- day rollover: a tab left open overnight must not file yesterday's form as today's ---- */
+    var NOT_EDITABLE_MSG = 'لا يمكن فتح تقرير هذا اليوم.';
+    /** The server's day changed since this form was loaded (S.clock follows the server's minute of day). */
+    function dayRolled() {
+      return !!(S.form && S.form.ok && !isPreview() && S.form.state !== 'correction' && S.form.state !== 'backfill' && nowMin() >= 1440);
+    }
+    var rolling = false;
+    function onNewDay() {
+      if (rolling || !S.token) return;
+      rolling = true;
+      saveDraftSoon.flush();
+      var oldDate = S.form && S.form.date;
+      var hadDraft = S.view === 'form' && !!S.form && !S.form.existing && hasMeaningfulAnswers();
+      S.editing = false;
+      S.correcting = false;
+      App.toast('بدأ يوم جديد — تم تحميل نموذج اليوم.', 'info', 6000);
+      var done = function () { rolling = false; };
+      reloadToday(false).then(function () {
+        done();
+        if (hadDraft && S.form && Array.isArray(S.form.missingDays) && S.form.missingDays.indexOf(oldDate) >= 0) {
+          S.backfillOpen = true;
+          render();
+          App.toast('ما كتبته ليوم ' + dayLabel(oldDate) + ' محفوظ — أرسله من «لم ترسل تقرير يوم سابق؟».', 'info', 8000);
+        }
+      }, done);
+    }
+
     function submit() {
       if (S.submitting || !S.form) return;
       if (isPreview()) { App.toast('وضع المعاينة — لا يتم إرسال أي بيانات.', 'info'); return; }
+      if (dayRolled()) { onNewDay(); return; }
+      if (closedNow()) {
+        saveDraftSoon.flush();
+        S.form.state = 'closed';
+        S.form.canEdit = false;
+        setView('closed');
+        window.scrollTo(0, 0);
+        App.toast('انتهى وقت الإرسال لهذا اليوم — ما كتبته محفوظ على هذا الجهاز.', 'danger', 6000);
+        return;
+      }
       if (uploadsPending()) { App.toast('انتظر حتى يكتمل رفع الصور.', 'info'); return; }
       S.showErrors = true;
       var errs = validateAll();
@@ -1719,8 +1833,8 @@
       go.then(function (ok) { if (ok) doSubmit(); });
     }
     function doSubmit() {
-      var payload = { answers: buildAnswers(), filledBy: S.filledBy.trim() };
-      if (S.form.state === 'correction') payload.date = S.form.date;
+      // Always name the day: a stale page can then never file its answers under another day.
+      var payload = { answers: buildAnswers(), filledBy: S.filledBy.trim(), date: S.form.date };
       saveDraftNow();
       S.submitting = true;
       S.serverError = '';
@@ -1740,7 +1854,8 @@
         S.form.existing = rec;
         S.form.date = rec.date || S.form.date;
         if (Array.isArray(S.form.returned)) S.form.returned = S.form.returned.filter(function (r) { return r.date !== rec.date; });
-        if (S.form.state === 'correction') S.form.canEdit = false;
+        if (Array.isArray(S.form.missingDays)) S.form.missingDays = S.form.missingDays.filter(function (d) { return d !== rec.date; });
+        if (S.form.state === 'correction' || S.form.state === 'backfill') S.form.canEdit = false;
         else if (rec.status === 'approved' && S.form.reviewEnabled) S.form.canEdit = false;
         S.editing = false;
         S.correcting = false;
@@ -1757,6 +1872,12 @@
       }).catch(function (err) {
         S.submitting = false;
         var msg = (err && err.message) || 'تعذّر إرسال التقرير.';
+        if (msg === NOT_EDITABLE_MSG) {   // this day is no longer open (e.g. the page stayed open past midnight)
+          updateBar();
+          App.toast(msg, 'danger', 6000);
+          onNewDay();
+          return;
+        }
         var network = err && (err.code === 'NETWORK' || err.code === 'TIMEOUT' || err.code === 'BUSY' || err.code === 'UNKNOWN' || err.code === 'NO_RUNTIME');
         S.serverError = msg;
         S.serverErrorRetry = !!network;
@@ -1816,6 +1937,19 @@
           if (res.code === 'NOT_EDITABLE') reloadToday(true);
           return;
         }
+        loadForm(res);
+      }, function (err) { App.toast(err.message, 'danger'); });
+    }
+    /** Opens the form of a missed workday (late report). */
+    function startBackfill(date, btn) {
+      if (!App.date.isISO(date)) return;
+      App.busy(btn, fetchForm(S.token, date)).then(function (res) {
+        if (!res.ok) {
+          App.toast(res.error || 'لا يمكن فتح تقرير هذا اليوم.', 'danger');
+          reloadToday(true);
+          return;
+        }
+        S.backfillOpen = false;
         loadForm(res);
       }, function (err) { App.toast(err.message, 'danger'); });
     }
@@ -1923,6 +2057,7 @@
         }
         case 'view-photo': return viewPhotoById(el.getAttribute('data-id'), (el.getAttribute('aria-label') || '').replace('عرض الصورة', 'صورة الشاهد'));
         case 'edit': {
+          if (dayRolled()) { onNewDay(); return; }
           S.editing = true;
           S.correcting = false;
           S.showErrors = false;
@@ -1934,7 +2069,7 @@
           return;
         }
         case 'cancel-edit': {
-          if (S.form.state === 'correction') { reloadToday(false); return; }
+          if (S.form.state === 'correction' || S.form.state === 'backfill') { reloadToday(false); return; }
           S.editing = false;
           S.correcting = false;
           S.serverError = '';
@@ -1944,6 +2079,17 @@
           return;
         }
         case 'correct': return startCorrection(el.getAttribute('data-date'), el);
+        case 'backfill': return startBackfill(el.getAttribute('data-date'), el);
+        case 'bf-toggle': {
+          S.backfillOpen = !S.backfillOpen;
+          var bf = doc.getElementById('sc-bf');
+          if (!bf) return;
+          bf.classList.toggle('is-open', S.backfillOpen);
+          el.setAttribute('aria-expanded', S.backfillOpen ? 'true' : 'false');
+          var list = doc.getElementById('sc-bf-list');
+          if (list) list.hidden = !S.backfillOpen;
+          return;
+        }
         case 'back-today': return reloadToday(true, el);
         case 'copy-receipt':
           App.copy(receiptText()).then(function (ok) { if (ok) App.toast('تم نسخ الإيصال'); });
@@ -2292,8 +2438,12 @@
     });
 
     /* keep the draft on tab switches / page hide; warn while photos upload */
-    doc.addEventListener('visibilitychange', function () { if (doc.visibilityState === 'hidden') saveDraftSoon.flush(); });
+    doc.addEventListener('visibilitychange', function () {
+      if (doc.visibilityState === 'hidden') saveDraftSoon.flush();
+      else if (doc.visibilityState === 'visible' && dayRolled()) onNewDay();
+    });
     window.addEventListener('pagehide', function () { saveDraftSoon.flush(); });
+    window.addEventListener('pageshow', function () { if (dayRolled()) onNewDay(); });
     window.addEventListener('beforeunload', function (ev) {
       if (uploadsPending() || S.submitting) { ev.preventDefault(); ev.returnValue = ''; return ''; }
       return undefined;
@@ -2301,9 +2451,12 @@
     window.addEventListener('offline', function () { App.toast('انقطع الاتصال بالإنترنت — ما تكتبه محفوظ على جهازك.', 'info', 5000); });
     window.addEventListener('online', function () { App.toast('عاد الاتصال بالإنترنت.', 'ok'); });
 
-    /* deadline chip stays current while the page is open */
+    /* deadline chip stays current while the page is open; a new day reloads today's form
+       (except while typing — the submit-time check covers that, so typing is never interrupted) */
     setInterval(function () {
-      if (!S.form || !S.form.ok || (S.view !== 'form' && S.view !== 'offday')) return;
+      if (!S.form || !S.form.ok) return;
+      if (dayRolled()) { if (S.view !== 'form') onNewDay(); return; }
+      if (S.view !== 'form' && S.view !== 'offday') return;
       var chip = doc.getElementById('sc-chip');
       if (chip && doc.getElementById('sc-dl')) App.render(chip, deadlineChipHtml());
     }, 30000);

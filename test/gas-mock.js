@@ -523,6 +523,29 @@
         throw exc('You do not have permission to call ' + what + '. Required permissions: (simple triggers such as onOpen run with AuthMode.' + env.authMode + ')');
       }
     }
+    /* OAuth scopes. With an explicit manifest `oauthScopes` list Apps Script grants exactly those
+       scopes, and (granular consent) the owner may tick only some of them. manifestScopes = null
+       (no manifest loaded) disables the checks. */
+    var SCOPE_PREFIX = 'https://www.googleapis.com/auth/';
+    var manifestScopes = Array.isArray(opts.oauthScopes) ? opts.oauthScopes.slice() : null;
+    var grantedScopes = null;            // null = every manifest scope was granted
+    function fullScope(sc) { return /^https:/.test(sc) ? sc : SCOPE_PREFIX + sc; }
+    function grantedList() { return manifestScopes ? (grantedScopes || manifestScopes).slice() : null; }
+    function requireScope(what, anyOf) {
+      if (!manifestScopes) return;
+      var need = anyOf.map(fullScope);
+      var granted = grantedList();
+      if (need.some(function (sc) { return granted.indexOf(sc) >= 0; })) return;
+      if (need.some(function (sc) { return manifestScopes.indexOf(sc) >= 0; })) {
+        throw exc('Specified permissions are not sufficient to call ' + what + '. Required permissions: ' + need.join(' || '));
+      }
+      throw exc('You do not have permission to call ' + what + '. Required permissions: ' + need.join(' || '));
+    }
+    function scopesMissing() {
+      if (!manifestScopes) return false;
+      var g = grantedList();
+      return manifestScopes.some(function (sc) { return g.indexOf(sc) < 0; });
+    }
     function intArg(v, method) {
       if (typeof v !== 'number' || !isFinite(v)) throw exc('Cannot convert ' + (typeof v === 'string' ? "'" + v + "'" : String(v)) + ' to int.' + (method ? ' (' + method + ')' : ''));
       if (Math.floor(v) !== v) throw exc('Cannot convert ' + v + ' to int.');
@@ -1355,13 +1378,30 @@
     /* ------------------------------------------------------------------ SpreadsheetApp */
     var SpreadsheetApp = {
       toString: function () { return 'SpreadsheetApp'; },
-      getActiveSpreadsheet: function () { bump('SpreadsheetApp.getActiveSpreadsheet'); return env.activeSpreadsheetAvailable === false ? null : spreadsheetApi; },
+      getActiveSpreadsheet: function () {
+        bump('SpreadsheetApp.getActiveSpreadsheet');
+        if (env.activeSpreadsheetAvailable === false) return null;
+        requireScope('SpreadsheetApp.getActiveSpreadsheet', ['spreadsheets', 'spreadsheets.currentonly']);
+        return spreadsheetApi;
+      },
+      /** The mock holds ONE spreadsheet: create() replaces it (a standalone script making its own data file). */
+      create: function (name) {
+        bump('SpreadsheetApp.create');
+        requireAuth('SpreadsheetApp.create');
+        requireScope('SpreadsheetApp.create', ['spreadsheets']);
+        if (typeof name !== 'string' || !name) throw sigError('SpreadsheetApp.create', arguments);
+        var first = newSheetState(0, 'Sheet1');
+        S.ss = { id: driveId(44), name: name, tz: SCRIPT_TZ, locale: 'ar', sheets: [first], activeSheetId: first.id, toasts: [],
+          owner: S.config.ownerEmail, createdByScript: true };
+        return spreadsheetApi;
+      },
       getActive: function () { return SpreadsheetApp.getActiveSpreadsheet(); },
       getActiveSheet: function () { return spreadsheetApi.getActiveSheet(); },
       getActiveRange: function () { return spreadsheetApi.getActiveRange(); },
       openById: function (id) {
         bump('SpreadsheetApp.openById');
         if (typeof id !== 'string') throw sigError('SpreadsheetApp.openById', arguments);
+        requireScope('SpreadsheetApp.openById', ['spreadsheets']);
         if (id === S.ss.id) return spreadsheetApi;
         throw exc('Unexpected error while getting the method or property openById on object SpreadsheetApp.');
       },
@@ -1525,6 +1565,7 @@
     var MailApp = {
       toString: function () { return 'MailApp'; },
       sendEmail: function (a, b, c, d) {
+        requireScope('MailApp.sendEmail', ['script.send_mail']);
         requireAuth('MailApp.sendEmail');
         bump('MailApp.sendEmail');
         var m;
@@ -1547,13 +1588,17 @@
           noReply: !!m.noReply, attachments: (m.attachments || []).length };
         S.mail.push(rec);
       },
-      getRemainingDailyQuota: function () { return MAIL_QUOTA - quotaToday().used; }
+      getRemainingDailyQuota: function () { requireScope('MailApp.getRemainingDailyQuota', ['script.send_mail']); return MAIL_QUOTA - quotaToday().used; }
     };
 
     /* ------------------------------------------------------------------ Session */
     var Session = {
       toString: function () { return 'Session'; },
-      getEffectiveUser: function () { return userObj(env.authMode === 'LIMITED' || env.authMode === 'NONE' ? '' : S.config.ownerEmail); },
+      getEffectiveUser: function () {
+        var hidden = env.authMode === 'LIMITED' || env.authMode === 'NONE' ||
+          (manifestScopes && grantedList().indexOf(SCOPE_PREFIX + 'userinfo.email') < 0);
+        return userObj(hidden ? '' : S.config.ownerEmail);
+      },
       getActiveUser: function () { return userObj(S.config.activeUserEmail || ''); },
       getScriptTimeZone: function () { return S.config.scriptTimeZone; },
       getActiveUserLocale: function () { return 'ar'; },
@@ -1577,6 +1622,7 @@
     }
     function addTrigger(t) {
       requireAuth('ScriptApp.newTrigger');
+      requireScope('ScriptApp.newTrigger', ['script.scriptapp']);
       if (S.triggers.length >= 20) throw exc('This script has too many triggers. Triggers must be deleted from the script before more can be added.');
       t.id = String(Math.floor(rng.float() * 9e15) + 1e15);
       t.createdAt = clock.local();
@@ -1632,7 +1678,7 @@
           toString: function () { return 'TriggerBuilder'; }
         };
       },
-      getProjectTriggers: function () { requireAuth('ScriptApp.getProjectTriggers'); bump('ScriptApp.getProjectTriggers'); return S.triggers.map(triggerObj); },
+      getProjectTriggers: function () { requireAuth('ScriptApp.getProjectTriggers'); requireScope('ScriptApp.getProjectTriggers', ['script.scriptapp']); bump('ScriptApp.getProjectTriggers'); return S.triggers.map(triggerObj); },
       getUserTriggers: function () { requireAuth('ScriptApp.getUserTriggers'); return S.triggers.map(triggerObj); },
       deleteTrigger: function (trig) {
         requireAuth('ScriptApp.deleteTrigger');
@@ -1642,7 +1688,25 @@
         if (S.triggers.length === before) throw exc('No trigger with the given ID could be found.');
       },
       invalidateAuth: function () {},
-      requireScopes: function () {},
+      getAuthorizationInfo: function (mode) {
+        if (!mode) throw sigError('ScriptApp.getAuthorizationInfo', arguments);
+        var missing = scopesMissing();
+        return {
+          getAuthorizationStatus: function () { return missing ? ScriptApp.AuthorizationStatus.REQUIRED : ScriptApp.AuthorizationStatus.NOT_REQUIRED; },
+          getAuthorizationUrl: function () { return missing ? 'https://script.google.com/macros/d/' + S.config.scriptId + '/authorize' : null; },
+          getAuthorizedScopes: function () { return grantedList() || []; },
+          toString: function () { return 'AuthorizationInfo'; }
+        };
+      },
+      requireAllScopes: function (mode) {
+        if (!mode) throw sigError('ScriptApp.requireAllScopes', arguments);
+        if (scopesMissing()) throw exc('Authorization is required to perform that action.');
+      },
+      requireScopes: function (mode, scopes) {
+        if (!mode || !Array.isArray(scopes)) throw sigError('ScriptApp.requireScopes', arguments);
+        var g = grantedList();
+        if (g && scopes.some(function (sc) { return g.indexOf(sc) < 0; })) throw exc('Authorization is required to perform that action.');
+      },
       getInstallationSource: function () { return 'NONE'; }
     };
 
@@ -1695,6 +1759,8 @@
     }
     function createFileIn(folderId, a, b, c) {
       requireAuth('DriveApp.createFile');
+      requireScope('DriveApp.Folder.createFile', ['drive']);
+      if (env.driveFull) throw exc('Drive storage quota has been exceeded. (gas-mock: env.driveFull)');
       bump('Drive.createFile');
       var blob;
       if (a instanceof Blob) blob = a;
@@ -1719,9 +1785,9 @@
         getMimeType: function () { return f().mimeType; },
         getUrl: function () { return 'https://drive.google.com/file/d/' + id + '/view?usp=drivesdk'; },
         getDownloadUrl: function () { return 'https://drive.google.com/uc?id=' + id + '&export=download'; },
-        getBlob: function () { bump('Drive.getBlob'); var x = f(); return new Blob(base64Decode(x.data), x.mimeType, x.name); },
+        getBlob: function () { requireScope('DriveApp.File.getBlob', ['drive', 'drive.readonly']); bump('Drive.getBlob'); var x = f(); return new Blob(base64Decode(x.data), x.mimeType, x.name); },
         getAs: function (t) { return api.getBlob().getAs(t); },
-        setTrashed: function (b) { requireAuth('DriveApp.File.setTrashed'); f().trashed = !!b; f().updated = clock.now(); return api; },
+        setTrashed: function (b) { requireAuth('DriveApp.File.setTrashed'); requireScope('DriveApp.File.setTrashed', ['drive']); f().trashed = !!b; f().updated = clock.now(); return api; },
         isTrashed: function () { return !!f().trashed; },
         setDescription: function (d) { f().description = d === null ? null : String(d); return api; },
         getDescription: function () { return f().description; },
@@ -1772,13 +1838,14 @@
     }
     function makeFolder(name, parent) {
       requireAuth('DriveApp.createFolder');
+      requireScope('DriveApp.createFolder', ['drive']);
       bump('Drive.createFolder');
       if (name === undefined || name === null) throw sigError('DriveApp.createFolder', [name]);
       var id = driveId(33);
       S.drive.folders[id] = { id: id, name: String(name), trashed: false, parents: [parent || S.drive.rootId], owner: S.config.ownerEmail, created: clock.now(), description: null, sharing: 'PRIVATE' };
       return folderObj(id);
     }
-    function forbiddenDrive(name) { return function () { throw policy('DriveApp.' + name + ' lists or searches the user\'s Drive — not allowed (spec §2.16: drive.file scope, app-created photos only).'); }; }
+    function forbiddenDrive(name) { return function () { throw policy('DriveApp.' + name + ' lists or searches the user\'s Drive — not allowed (spec §2.16: the app touches only the photos folder and files it created).'); }; }
     var DriveApp = {
       toString: function () { return 'DriveApp'; },
       Access: { ANYONE: 'ANYONE', ANYONE_WITH_LINK: 'ANYONE_WITH_LINK', DOMAIN: 'DOMAIN', DOMAIN_WITH_LINK: 'DOMAIN_WITH_LINK', PRIVATE: 'PRIVATE' },
@@ -1787,6 +1854,7 @@
       createFile: function (a, b, c) { return createFileIn(S.drive.rootId, a, b, c); },
       getFolderById: function (id) {
         requireAuth('DriveApp.getFolderById');
+        requireScope('DriveApp.getFolderById', ['drive', 'drive.readonly']);
         bump('Drive.getFolderById');
         if (typeof id !== 'string') throw sigError('DriveApp.getFolderById', arguments);
         if (id === '') throw exc('Invalid argument: id');
@@ -1796,6 +1864,7 @@
       },
       getFileById: function (id) {
         requireAuth('DriveApp.getFileById');
+        requireScope('DriveApp.getFileById', ['drive', 'drive.readonly']);
         bump('Drive.getFileById');
         if (typeof id !== 'string') throw sigError('DriveApp.getFileById', arguments);
         if (id === '') throw exc('Invalid argument: id');
@@ -1811,7 +1880,8 @@
       getFiles: forbiddenDrive('getFiles'), searchFiles: forbiddenDrive('searchFiles'), getFilesByName: forbiddenDrive('getFilesByName'),
       getFilesByType: forbiddenDrive('getFilesByType'), getFolders: forbiddenDrive('getFolders'), searchFolders: forbiddenDrive('searchFolders'),
       getFoldersByName: forbiddenDrive('getFoldersByName'), getTrashedFiles: forbiddenDrive('getTrashedFiles'), getTrashedFolders: forbiddenDrive('getTrashedFolders'),
-      getStorageUsed: function () { return 0; }
+      getStorageUsed: function () { requireScope('DriveApp.getStorageUsed', ['drive', 'drive.readonly']); return env.storageUsed || 0; },
+      getStorageLimit: function () { requireScope('DriveApp.getStorageLimit', ['drive', 'drive.readonly']); return env.storageLimit || 15 * 1024 * 1024 * 1024; }
     };
 
     /* ------------------------------------------------------------------ HtmlService */
@@ -2066,6 +2136,12 @@
       evictCache: function (kind) { if (kind) S.cache[kind] = {}; else S.cache = { script: {}, user: {}, document: {} }; },
       contendLock: function (times) { lockStats.contention = times === undefined ? 1 : times; },
       setFiles: function (f) { filesResolver = f || null; },
+      /** Loads appsscript.json: its oauthScopes become the granted set (null/absent → no scope checks). */
+      setManifest: function (m) { manifestScopes = m && Array.isArray(m.oauthScopes) ? m.oauthScopes.slice() : null; grantedScopes = null; },
+      get manifestScopes() { return manifestScopes ? manifestScopes.slice() : null; },
+      /** Granular consent: grant only these scopes (short or full names); null = all manifest scopes. */
+      grantScopes: function (list) { grantedScopes = Array.isArray(list) ? list.map(fullScope) : null; },
+      revokeScope: function (sc) { var g = grantedList() || []; grantedScopes = g.filter(function (x) { return x !== fullScope(sc); }); },
       setScriptUrl: function (url) { S.config.scriptUrl = url || null; },
       setOwnerEmail: function (email) { S.config.ownerEmail = String(email); },
       setActiveUserEmail: function (email) { S.config.activeUserEmail = email ? String(email) : ''; },

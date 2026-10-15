@@ -1,6 +1,6 @@
 {
   "name": "nabd-schools",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "نبض المدارس — متابعة سير العملية التعليمية: Google Apps Script web app for school supervisors (with a local Apps Script mock for tests).",
   "license": "UNLICENSED",
@@ -10,7 +10,11 @@
   "scripts": {
     "test:unit": "NODE_PATH=/opt/node-tools/node_modules node --test test/unit.js",
     "test:e2e": "NODE_PATH=/opt/node-tools/node_modules node --test --test-concurrency=1 test/e2e.js",
-    "test": "npm run test:unit && npm run test:e2e",
+    "test:bundle": "NODE_PATH=/opt/node-tools/node_modules node --test test/bundle.js",
+    "test": "npm run test:unit && npm run test:bundle && npm run test:e2e",
+    "build:bundle": "node tools/build-bundle.js",
+    "build:demo": "node tools/build-demo.js",
+    "build": "npm run build:bundle && npm run build:demo",
     "dev": "NODE_PATH=/opt/node-tools/node_modules node test/server.js"
   },
   "devDependencies": {

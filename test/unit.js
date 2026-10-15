@@ -47,7 +47,7 @@ const ATT_OK = { students: { present: 380, absent: 20 }, teachers: { present: 29
 function sys(o = {}) {
   const env = GasMock.createGasEnv({
     ownerEmail: o.ownerEmail || OWNER,
-    scriptUrl: o.notDeployed ? null : BASE_URL,
+    scriptUrl: o.notDeployed ? null : (o.scriptUrl || BASE_URL),
     clock: o.clock || '2026-10-14T07:30',
     newSheetRows: o.newSheetRows,
     seed: o.seed
@@ -250,7 +250,7 @@ describe('platform contract', () => {
     const t = sys();
     assert.equal(t.app.evaluate('APP_NAME'), 'نبض المدارس');
     assert.equal(t.app.evaluate('DEFAULT_SYSTEM_TITLE'), 'متابعة سير العملية التعليمية');
-    assert.equal(t.app.evaluate('APP_VERSION'), '1.1.0');
+    assert.equal(t.app.evaluate('APP_VERSION'), '1.2.0');
     assert.equal(t.app.evaluate('TZ'), 'Asia/Riyadh');
   });
   it('does not use services outside the declared scopes', () => {
@@ -288,7 +288,7 @@ describe('doGet routing', () => {
     const boot = extractBoot(out.html);
     assert.equal(boot.page, 'admin');
     assert.equal(boot.appName, 'نبض المدارس');
-    assert.equal(boot.version, '1.1.0');
+    assert.equal(boot.version, '1.2.0');
     assert.equal(boot.status.setupDone, false);
     assert.equal(boot.status.ownerEmailMasked, 'su••••••@gmail.com');
     assert.equal(boot.status.deployed, true);
@@ -451,7 +451,7 @@ describe('setup wizard (api_completeSetup)', () => {
     assert.equal(b.systemTitle, 'متابعة سير العملية التعليمية');
     assert.equal(b.schoolsCount, 2);
     assert.equal(b.ownerEmail, OWNER);
-    assert.equal(b.version, '1.1.0');
+    assert.equal(b.version, '1.2.0');
     assert.equal(b.today, '2026-10-14');
     assert.equal(b.now, '07:30');
     assert.equal(b.baseUrl, BASE_URL);
@@ -598,7 +598,7 @@ describe('schools CRUD, links and pins', () => {
     t.call('api_saveSchool', token, { name: 'Al Noor School' });
     expectError(() => t.call('api_saveSchool', token, { name: 'al noor  SCHOOL' }), null, 'duplicate ignoring case');
     expectError(() => t.call('api_saveSchool', token, { name: 'مدرسة جديدة', phone: '05abc' }));
-    expectError(() => t.call('api_saveSchool', token, { name: 'مدرسة جديدة', phone: '0'.repeat(16) }));
+    expectError(() => t.call('api_saveSchool', token, { name: 'مدرسة جديدة', phone: '9'.repeat(16) }));
     expectError(() => t.call('api_saveSchool', token, { name: 'مدرسة جديدة', students: -1 }));
     expectError(() => t.call('api_saveSchool', token, { name: 'مدرسة جديدة', students: 1.5 }));
     expectError(() => t.call('api_saveSchool', token, { name: 'مدرسة جديدة', teachers: 100001 }));
@@ -607,7 +607,9 @@ describe('schools CRUD, links and pins', () => {
     expectError(() => t.call('api_saveSchool', token, { name: 'مدرسة جديدة', principal: 'م'.repeat(61) }));
     const s = t.call('api_saveSchool', token, { name: 'مدرسة جديدة', phone: '050-123 4567', stage: 'رياض أطفال' }).school;
     assert.equal(s.phone, '0501234567');
-    assert.equal(t.call('api_saveSchool', token, { name: 'مدرسة دولية', phone: '+966 50 123 4567' }).school.phone, '+966501234567');
+    // phones are stored as digits only: '+' / '00' international prefixes become plain digits
+    assert.equal(t.call('api_saveSchool', token, { name: 'مدرسة دولية', phone: '+966 50 123 4567' }).school.phone, '966501234567');
+    assert.equal(t.call('api_saveSchool', token, { name: 'مدرسة دولية 2', phone: '00966-50-123-4568' }).school.phone, '966501234568');
   });
   it('edits keep id, token and pin', () => {
     const t = sys();
@@ -1643,6 +1645,7 @@ describe('dailyDigest trigger', () => {
     const { token, schools } = t.ready();
     const evil = t.call('api_saveSchool', token, { name: '<img src=x onerror=alert(1)> مدرسة' }).school;
     t.call('api_saveSettings', token, { digest: { enabled: true, time: '10:00' } });
+    t.boot({});   // opening the dashboard from the deployment saves its URL (the digest never calls getUrl())
     t.submit(schools[0]);
     t.at('2026-10-14T10:00');
     const n = t.env.mailbox.length;
@@ -1717,6 +1720,7 @@ describe('spreadsheet menu (onOpen / menu*)', () => {
   });
   it('menuShowLink shows the dashboard link (or deployment help when not deployed)', () => {
     let t = sys();
+    t.boot({});   // the saved deployment URL (captured when the dashboard is opened) — never getUrl() in a menu
     t.app.runMenu('menuShowLink');
     assert.ok(t.env.ui.dialogs.some((d) => d.html.includes(BASE_URL)));
     t = sys({ notDeployed: true });
@@ -1797,5 +1801,617 @@ describe('storage invariants: formula injection & auto-conversion', () => {
       assert.ok(r && typeof r === 'object', fn);
     }
     assert.ok(t.form(schools[0]).existing);
+  });
+});
+
+/* ================================================================== 19. hardening: platform (scopes, URLs, permissions) */
+const DRIVE_FULL_SCOPE = 'https://www.googleapis.com/auth/drive';
+const DEV_URL = 'https://script.google.com/macros/s/HEADDEPLOYMENTID/dev';
+describe('OAuth scopes & permissions', () => {
+  it('the manifest grants the full Drive scope whenever DriveApp is used (DriveApp ignores drive.file)', () => {
+    const code = fs.readdirSync(SRC).filter((f) => f.endsWith('.gs')).map((f) => fs.readFileSync(path.join(SRC, f), 'utf8')).join('\n');
+    const manifest = JSON.parse(fs.readFileSync(path.join(SRC, 'appsscript.json'), 'utf8'));
+    if (/\bDriveApp\./.test(code)) assert.ok(manifest.oauthScopes.includes(DRIVE_FULL_SCOPE), 'oauthScopes must include ' + DRIVE_FULL_SCOPE);
+    for (const sc of ['spreadsheets', 'script.send_mail', 'script.scriptapp', 'userinfo.email']) {
+      assert.ok(manifest.oauthScopes.includes('https://www.googleapis.com/auth/' + sc), sc);
+    }
+  });
+  it('with only drive.file (the old manifest) photos fail with a clear permission message, not «خطأ غير متوقع»', () => {
+    const t = sys();
+    const { schools } = t.ready();
+    const m = JSON.parse(fs.readFileSync(path.join(SRC, 'appsscript.json'), 'utf8'));
+    t.env.setManifest({ oauthScopes: m.oauthScopes.map((x) => (x === DRIVE_FULL_SCOPE ? x + '.file' : x)) });
+    const e = expectError(() => t.upload(schools[0]), /Google Drive/);
+    assert.doesNotMatch(e.message, /غير متوقع/);
+  });
+  it('a skipped «send email» permission says how to grant it (no endless «try later» lock-out)', () => {
+    const t = sys();
+    t.env.revokeScope('script.send_mail');
+    const e = expectError(() => t.call('api_requestCode'), /تحديد الكل/);
+    assert.doesNotMatch(e.message, /بعد قليل/);
+  });
+  it('a skipped spreadsheets permission shows a permission page, not the generic error page', () => {
+    const t = sys();
+    t.ready();
+    t.env.revokeScope('spreadsheets');
+    const html = t.app.doGet({});
+    assert.match(html, /تحديد الكل/);
+    assert.doesNotMatch(html, /خطأ غير متوقع/);
+  });
+  it('the deploy steps ask to tick «تحديد الكل»; menu items re-request permissions that were skipped', () => {
+    const t = sys();
+    assert.match(t.app.evaluate('DEPLOY_STEPS_[4]'), /تحديد الكل/);
+    assert.match(t.app.evaluate('DEPLOY_STEPS_[5]'), /exec/);
+    t.env.revokeScope('drive');
+    assert.throws(() => t.app.runMenu('menuShowGuide'), /Authorization is required/);
+    t.env.grantScopes(null);
+    t.app.runMenu('menuShowGuide');
+    assert.ok(t.env.ui.dialogs.length === 1);
+  });
+});
+
+describe('evidence photos: app folder only, folder history, full Drive', () => {
+  it('a Drive file outside the app folder is never treated as a school photo (even with a school-like name)', () => {
+    const t = sys();
+    const { token, schools } = t.ready();
+    t.upload(schools[0]);
+    const stray = t.env.drive.DriveApp.createFile('2026-10-14_' + schools[0].id + '_zzzzzz.png', 'x', 'image/png');
+    const id = stray.getId();
+    expectError(() => t.submit(schools[0], { photos: [{ id: id, name: 'x', w: 1, h: 1, size: 1 }] }), /غير متاحة/);
+    expectError(() => t.call('api_schoolPhoto', schools[0].token, id), /لم يُعثر/);
+    expectError(() => t.call('api_photo', token, id), /لم يُعثر/);
+    expectError(() => t.call('api_discardPhoto', schools[0].token, id));
+    assert.equal(t.env.drive.file(id).trashed, false, 'a file outside the app folder is never trashed');
+  });
+  it('photos stay viewable after their trashed folder was replaced and then restored', () => {
+    const t = sys();
+    const { token, schools } = t.ready();
+    const first = t.upload(schools[0]).photo;
+    t.submit(schools[0], { photos: [first] });
+    const oldFolder = t.env.drive.file(first.id).parents[0];
+    t.env.drive.trash(oldFolder);
+    const second = t.upload(schools[1]).photo;
+    assert.notEqual(t.env.drive.file(second.id).parents[0], oldFolder);
+    t.env.drive.DriveApp.getFolderById(oldFolder).setTrashed(false);
+    assert.match(t.call('api_photo', token, first.id).dataUrl, /^data:image\/png;base64,/);
+    assert.match(t.call('api_photo', token, second.id).dataUrl, /^data:image\/png;base64,/);
+    assert.ok(t.cfg().photosFolderIdsOld.includes(oldFolder));
+  });
+  it('a photo still used by a saved report is kept when discarded (found by a TextFinder, not a full-sheet read)', () => {
+    const t = sys();
+    const { schools } = t.ready();
+    const p = t.upload(schools[0]).photo;
+    t.submit(schools[0], { photos: [p] });
+    for (const s of schools.slice(1)) t.submit(s);
+    assert.equal(t.call('api_discardPhoto', schools[0].token, p.id).ok, true);
+    assert.equal(t.env.drive.file(p.id).trashed, false);
+    assert.ok((t.app.lastCall.ops['TextFinder.findAll'] || 0) >= 1, 'uses a TextFinder');
+    const loose = t.upload(schools[0]).photo;
+    assert.equal(t.call('api_discardPhoto', schools[0].token, loose.id).ok, true);
+    assert.equal(t.env.drive.file(loose.id).trashed, true, 'an unused upload is trashed');
+  });
+  it('a full Drive gives a clear message; the dashboard reports Drive storage use', () => {
+    const t = sys();
+    const { token, schools } = t.ready();
+    t.env.storageUsed = 14 * 1024 * 1024 * 1024;
+    t.env.evictCache();   // the figure is cached for 6 h
+    const st = t.call('api_bootstrap', token).storage;
+    assert.equal(st.used, 14 * 1024 * 1024 * 1024);
+    assert.equal(st.limit, 15 * 1024 * 1024 * 1024);
+    t.env.driveFull = true;
+    expectError(() => t.upload(schools[0]), /ممتلئة/);
+  });
+});
+
+describe('web-app URL: links come from the saved deployment URL', () => {
+  it('the validator accepts only deployment (/exec) URLs; query and hash are stripped', () => {
+    const t = sys();
+    const v = (u) => t.app.invoke('cleanWebAppUrl_', u);
+    assert.equal(v(BASE_URL), BASE_URL);
+    assert.equal(v(' ' + BASE_URL + '?s=abc#x '), BASE_URL);
+    assert.equal(v('https://script.google.com/a/macros/school.edu.sa/s/AKfy-1_2/exec'), 'https://script.google.com/a/macros/school.edu.sa/s/AKfy-1_2/exec');
+    for (const bad of [DEV_URL, 'https://evil.example.com/macros/s/AKfycbTEST/exec', 'http://script.google.com/macros/s/X/exec',
+      'https://script.google.com/macros/s/X/exec/extra', '', null]) assert.equal(v(bad), '', String(bad));
+    assert.equal(t.app.evaluate('WEBAPP_URL_RE_.test(' + JSON.stringify(BASE_URL + '?x=1') + ')'), false, 'the pattern itself refuses a query string');
+  });
+  it('opening the dashboard saves its /exec URL once; a /dev session keeps using it and is flagged', () => {
+    const t = sys();
+    const { token } = t.ready();
+    assert.ok(!t.cfg().webAppUrl);
+    t.boot({});
+    assert.equal(t.cfg().webAppUrl, BASE_URL);
+    t.env.setScriptUrl(DEV_URL);
+    assert.equal(t.boot({}).status.devMode, true);
+    const b = t.call('api_bootstrap', token);
+    assert.equal(b.devMode, true);
+    assert.equal(b.baseUrl, BASE_URL);
+    const r = t.call('api_schools', token);
+    assert.equal(r.devMode, true);
+    assert.ok(r.schools.every((s) => s.link.startsWith(BASE_URL + '?s=')));
+    assert.ok(!JSON.stringify(r).includes('HEADDEPLOYMENTID'), 'the /dev id never reaches a link');
+  });
+  it('without a saved URL a /dev URL gives no links at all — never a rewritten, dead /exec link', () => {
+    const t = sys({ scriptUrl: DEV_URL });
+    const { token } = t.ready();
+    const boot = t.boot({});
+    assert.equal(boot.status.deployed, false);
+    assert.equal(boot.status.devMode, true);
+    assert.ok(!t.cfg().webAppUrl, 'a /dev URL is never saved');
+    const r = t.call('api_schools', token);
+    assert.equal(r.baseUrl, null);
+    assert.ok(r.schools.every((s) => s.link === null));
+    assert.ok(!JSON.stringify(r).includes('/exec'));
+  });
+  it('the menu dialog and the digest use only the saved URL (getUrl() is unreliable there)', () => {
+    const t = sys();
+    const { token } = t.ready();
+    t.call('api_saveSettings', token, { digest: { enabled: true, time: '10:00' } });
+    t.env.setScriptUrl('https://script.google.com/macros/s/UNRELATEDID/exec');   // what getUrl() may say in a menu / trigger
+    t.app.runMenu('menuShowLink');
+    let dlg = t.env.ui.dialogs[t.env.ui.dialogs.length - 1].html;
+    assert.ok(!dlg.includes('UNRELATEDID'));
+    assert.match(dlg, /غير محفوظ|نشر/);
+    t.at('2026-10-14T10:00');
+    t.app.runTrigger('dailyDigest');
+    let mail = t.env.mailbox[t.env.mailbox.length - 1];
+    assert.match(mail.subject, /ملخص اليوم/);
+    assert.ok(!mail.htmlBody.includes('UNRELATEDID') && !mail.htmlBody.includes('فتح لوحة المتابعة'), 'no button without a saved URL');
+    t.call('api_saveSettings', token, { webAppUrl: BASE_URL });
+    t.app.runMenu('menuShowLink');
+    dlg = t.env.ui.dialogs[t.env.ui.dialogs.length - 1].html;
+    assert.ok(dlg.includes(BASE_URL) && !dlg.includes('UNRELATEDID'));
+    t.at('2026-10-15T10:00');
+    t.app.runTrigger('dailyDigest');
+    mail = t.env.mailbox[t.env.mailbox.length - 1];
+    assert.ok(mail.htmlBody.includes(BASE_URL) && !mail.htmlBody.includes('UNRELATEDID'));
+  });
+  it('settings and the wizard validate the URL with clear Arabic messages', () => {
+    const t = sys();
+    const token = t.login();
+    expectError(() => t.call('api_completeSetup', token, { supervisor: { name: 'أحمد' }, webAppUrl: 'https://example.com/x' }), /رابط تطبيق الويب/);
+    assert.equal(t.call('api_completeSetup', token, { supervisor: { name: 'أحمد' }, webAppUrl: BASE_URL + '?usp=sharing' }).ok, true);
+    assert.equal(t.cfg().webAppUrl, BASE_URL);
+    expectError(() => t.call('api_saveSettings', token, { webAppUrl: DEV_URL }), /التجريبية/);
+    expectError(() => t.call('api_saveSettings', token, { webAppUrl: 'script.google.com/macros/s/X' }), /غير صحيح/);
+    t.call('api_saveSettings', token, { webAppUrl: '' });
+    assert.equal(t.cfg().webAppUrl, '');
+    const st = t.call('api_getSettings', token);
+    assert.equal(st.webAppUrl, '');
+    assert.equal(st.detectedUrl, BASE_URL);
+    assert.equal(st.baseUrl, BASE_URL, 'falls back to a live /exec URL');
+  });
+});
+
+/* ================================================================== 20. hardening: hand-edited sheets */
+describe('hand-edited sheets', () => {
+  const sheetApi = (t, name) => t.env.spreadsheet.getSheetByName(name);
+  it('a column inserted / deleted in «المدارس» (or a title row) never rewrites links, pins or «نشطة»', () => {
+    const t = sys();
+    const { token, schools } = t.ready();
+    const edits = { 'insert column': (s) => s.insertColumnAfter(2), 'delete column': (s) => s.deleteColumn(3), 'title row': (s) => s.insertRowBefore(1) };
+    for (const [label, edit] of Object.entries(edits)) {
+      const snap = t.env.snapshot();
+      edit(sheetApi(t, SH.schools));
+      const before = JSON.stringify(t.sheet(SH.schools).values);
+      const f = t.form(schools[0]);
+      assert.equal(f.ok, false, label);
+      assert.equal(f.error, 'النظام غير متاح مؤقتًا. تواصل مع المشرف.', label);
+      assert.equal(t.boot({ s: schools[1].token }).form.error, 'النظام غير متاح مؤقتًا. تواصل مع المشرف.', label);
+      assert.equal(t.boot({ f: 'all' }).picker.ok, false, label);
+      expectError(() => t.call('api_resolveSchool', schools[0].id, schools[0].pin), /غير متاح مؤقتًا/, label);
+      expectError(() => t.call('api_schools', token), /تم تعديل أعمدة الورقة «المدارس»/, label);
+      expectError(() => t.call('api_saveSchool', token, { name: 'مدرسة أخرى' }), /«المدارس»/, label);
+      assert.equal(JSON.stringify(t.sheet(SH.schools).values), before, label + ': nothing was written');
+      t.env.restore(snap);
+    }
+    assert.equal(t.form(schools[0]).ok, true);
+    assert.deepEqual(t.call('api_schools', token).schools.map((s) => s.token).sort(), schools.map((s) => s.token).sort());
+  });
+  it('hand-typed rows still get an id, link and pin (logged); an unknown «نشطة» value is not read as inactive', () => {
+    const t = sys();
+    const { token } = t.ready();
+    const sh = sheetApi(t, SH.schools);
+    const row = sh.getLastRow() + 1;
+    sh.getRange(row, 2).setValue('مدرسة مكتوبة يدويًا');
+    sh.getRange(2, 12).setValue('مفعّلة');
+    const list = t.call('api_schools', token).schools;
+    const typed = list.find((x) => x.name === 'مدرسة مكتوبة يدويًا');
+    assert.ok(typed && /^[A-Za-z0-9]{20}$/.test(typed.token) && /^\d{4}$/.test(typed.pin) && typed.active);
+    assert.ok(list.every((x) => x.active), 'an unknown «نشطة» value keeps the school active');
+    assert.ok(t.sheet(SH.log).values.some((r) => /إكمال بيانات صفوف المدارس/.test(r[1])), 'the repair is logged');
+  });
+  it('a column inserted inside the fixed columns of «التقارير» stops reads and writes with a clear message', () => {
+    const t = sys();
+    const { token, schools } = t.ready();
+    t.submit(schools[0]);
+    const snapRows = JSON.stringify(reportRows(t));
+    sheetApi(t, SH.reports).insertColumnAfter(4);
+    expectError(() => t.call('api_day', token), /«التقارير»/);
+    expectError(() => t.call('api_review', token, '2026-10-14', schools[0].id, 'approve', ''), /«التقارير»/);
+    expectError(() => t.submit(schools[1]), /غير متاح مؤقتًا/);
+    sheetApi(t, SH.reports).deleteColumn(5);
+    assert.equal(JSON.stringify(reportRows(t)), snapRows, 'nothing was written while the layout was wrong');
+    assert.equal(t.row(t.day(), schools[0].id).report.status, 'pending');
+  });
+  it('a column inserted among the readable columns: later reports still land under the right headings', () => {
+    const t = sys();
+    const { schools } = t.ready();
+    t.submit(schools[0], { att: { students: { present: 380, absent: 20 } } });
+    const sh = sheetApi(t, SH.reports);
+    const hdr0 = headerRow(t);
+    const presentCol = hdr0.indexOf('الطلاب - الحاضرون') + 1;
+    sh.insertColumnBefore(presentCol);
+    sh.getRange(1, presentCol).setValue('تعليق المشرف');
+    sh.getRange(2, presentCol).setValue('ملاحظتي');
+    t.submit(schools[1], { att: { students: { present: 290, absent: 10 } } });
+    const hdr = headerRow(t), rows = reportRows(t);
+    const rowB = rows.find((r) => r[2] === schools[1].id), rowA = rows.find((r) => r[2] === schools[0].id);
+    assert.equal(rowB[hdr.indexOf('الطلاب - الحاضرون')], 290);
+    assert.equal(rowB[hdr.indexOf('الطلاب - الغائبون')], 10);
+    assert.equal(rowB[hdr.indexOf('تعليق المشرف')], '', 'the supervisor column is never overwritten');
+    assert.equal(rowA[hdr.indexOf('تعليق المشرف')], 'ملاحظتي');
+    assert.equal(hdr.filter((h) => h === 'الطلاب - الحاضرون').length, 1, 'no duplicate columns');
+  });
+  it('deleting a readable column when the sheet has no spare columns does not break submissions', () => {
+    const t = sys();
+    const { token, schools } = t.ready({ setup: { preset: 'extended' } });
+    const sh = sheetApi(t, SH.reports);
+    assert.equal(sh.getMaxColumns(), sh.getLastColumn(), 'precondition: no spare columns');
+    const del = headerRow(t).indexOf('ملاحظة عامة') + 1;
+    sh.deleteColumn(del);
+    assert.equal(t.submit(schools[0], { note: 'نص' }).ok, true);
+    assert.equal(t.submit(schools[1]).ok, true);
+    assert.equal(t.call('api_saveFields', token, t.fieldsNow()).ok, true);
+    assert.equal(t.submit(schools[2]).ok, true);
+    const hdr = headerRow(t), rows = reportRows(t);
+    assert.equal(hdr.filter((h) => h === 'ملاحظة عامة').length, 1, 'the deleted column was added back once');
+    assert.equal(rows.find((r) => r[2] === schools[0].id)[hdr.indexOf('ملاحظة عامة')], 'نص');
+    assert.equal(rows.length, 3);
+    assert.ok(rows.every((r) => r[8] === 'لا' && Number(r[9]) === 0), 'no half-saved retries (edits stay 0)');
+  });
+  it('a renamed data sheet is renamed back instead of being replaced by an empty one', () => {
+    const t = sys();
+    const { token, schools } = t.ready();
+    sheetApi(t, SH.schools).setName('المدارس 1447');
+    sheetApi(t, SH.reports).setName('التقارير القديمة');
+    assert.equal(t.form(schools[0]).ok, true, 'school links keep working');
+    const names = t.env.inspect.sheetNames();
+    assert.ok(names.includes(SH.schools) && names.includes(SH.reports));
+    assert.ok(!names.includes('المدارس 1447') && !names.includes('التقارير القديمة'));
+    assert.equal(t.call('api_schools', token).schools.length, 3);
+    assert.ok(t.sheet(SH.log).values.some((r) => /استعادة اسم ورقة/.test(r[1])));
+  });
+});
+
+/* ================================================================== 21. hardening: dashboard & statistics logic */
+describe('dashboard and statistics logic', () => {
+  it('schools added after the deadline are first due the next day (no false missing / streak alerts)', () => {
+    const t = sys({ clock: '2026-10-14T20:00' });
+    const { token, schools } = t.ready();
+    assert.equal(t.day('2026-10-14').rows.length, 0, 'setup evening: nobody is expected yet');
+    t.at('2026-10-15T09:30');
+    t.submit(schools[0]);
+    const d = t.day();
+    assert.ok(!d.alerts.some((a) => a.type === 'missing_streak'));
+    assert.equal(d.totals.missing, 2);
+    const r = t.call('api_range', token, '2026-10-14', '2026-10-15');
+    assert.equal(r.days.find((x) => x.date === '2026-10-14').expected, 0);
+    const a = r.schools.find((s) => s.id === schools[0].id);
+    assert.deepEqual([a.onTimeDays, a.expectedDays, a.compliancePct], [1, 1, 100]);
+    t.at('2026-10-15T13:00');
+    const late = t.call('api_saveSchool', token, { name: 'مدرسة أُضيفت ظهرًا' }).school;
+    assert.ok(!t.day().rows.some((x) => x.school.id === late.id), 'not expected on the day it was added after the deadline');
+    assert.equal(t.submit(late).receipt.late, true, 'a report sent after the deadline is still late');
+  });
+  it('range statistics count today only after the deadline (or once a school reported)', () => {
+    const t = sys({ clock: '2026-10-11T07:00' });
+    const { token, schools } = t.ready();
+    for (const d of ['2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14']) { t.at(d + 'T07:30'); for (const s of schools) t.submit(s); }
+    t.at('2026-10-15T07:15');
+    let r = t.call('api_range', token, '2026-10-11', '2026-10-15');
+    let today = r.days.find((x) => x.date === '2026-10-15');
+    assert.equal(r.totals.compliancePct, 100);
+    assert.equal(today.expected, 0); assert.equal(today.compliancePct, null);
+    assert.ok(r.schools.every((s) => s.compliancePct === 100 && s.expectedDays === 4));
+    assert.equal(r.workdays, 5, 'today is still a workday of the range');
+    t.submit(schools[0]);
+    r = t.call('api_range', token, '2026-10-11', '2026-10-15');
+    today = r.days.find((x) => x.date === '2026-10-15');
+    assert.deepEqual([today.onTime, today.expected, today.compliancePct], [1, 1, 100]);
+    t.at('2026-10-15T09:30');
+    r = t.call('api_range', token, '2026-10-11', '2026-10-15');
+    today = r.days.find((x) => x.date === '2026-10-15');
+    assert.deepEqual([today.onTime, today.expected], [1, 3]);
+    assert.equal(r.totals.compliancePct, 86.7);
+    const only = sys({ clock: '2026-10-11T07:30' });
+    const o = only.ready();
+    const r2 = only.call('api_range', o.token, '2026-10-11', '2026-10-11');
+    assert.equal(r2.totals.compliancePct, null);
+    assert.equal(r2.days[0].expected, 0);
+  });
+  it('«X من Y» never shows X > Y: onTime counts exclude off-day and inactive-school reports', () => {
+    const t = sys({ clock: '2026-10-11T07:00' });
+    const { token, schools } = t.ready();
+    const [A, B, C] = schools;
+    for (const d of ['2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15']) { t.at(d + 'T07:30'); for (const s of schools) t.submit(s); }
+    t.at('2026-10-16T10:00');
+    t.submit(A);
+    t.call('api_setSchoolActive', token, C.id, false);
+    t.at('2026-10-18T10:00');
+    const r = t.call('api_range', token, '2026-10-11', '2026-10-16');
+    for (const d of r.days) assert.ok(d.onTime <= d.expected, d.date + ': ' + d.onTime + ' of ' + d.expected);
+    const sa = r.schools.find((s) => s.id === A.id), sc = r.schools.find((s) => s.id === C.id);
+    assert.deepEqual([sa.onTimeDays, sa.expectedDays, sa.extraDays, sa.submittedDays], [5, 5, 1, 6]);
+    assert.deepEqual([sc.onTimeDays, sc.expectedDays, sc.extraDays], [0, 0, 5]);
+    assert.ok(r.schools.every((s) => s.onTimeDays <= s.expectedDays));
+    assert.equal(r.schools.find((s) => s.id === B.id).compliancePct, 100);
+  });
+  it('the deadline applies only on workdays (holiday / weekend after it, late submissions off)', () => {
+    const t = sys({ clock: '2026-10-11T07:00' });
+    const { token, schools } = t.ready();
+    t.call('api_saveSettings', token, { schedule: { allowLate: false }, holidays: ['2026-10-15'] });
+    t.at('2026-10-15T10:00');
+    const f = t.form(schools[0]);
+    assert.deepEqual([f.state, f.canEdit, f.isHoliday, f.allowLate], ['open', true, true, false]);
+    assert.equal(t.submit(schools[0]).receipt.late, false);
+    t.at('2026-10-16T10:00');
+    assert.equal(t.form(schools[1]).state, 'open');
+    assert.equal(t.submit(schools[1]).receipt.late, false);
+    assert.equal(t.day('2026-10-15').totals.late, 0);
+    t.at('2026-10-18T10:00');
+    assert.equal(t.form(schools[2]).state, 'closed', 'a workday after the deadline stays closed');
+  });
+  it('the form tells the page whether late submissions are allowed', () => {
+    const t = sys();
+    const { token, schools } = t.ready();
+    assert.equal(t.form(schools[0]).allowLate, true);
+    assert.equal(t.form('__preview').allowLate, true);
+    t.call('api_saveSettings', token, { schedule: { allowLate: false } });
+    assert.equal(t.form(schools[0]).allowLate, false);
+  });
+  it('reports returned on earlier days stay visible (returnedOther), separate from pendingOther', () => {
+    const t = sys({ clock: '2026-10-11T07:00' });
+    const { token, schools } = t.ready();
+    t.submit(schools[0]); t.submit(schools[1]);
+    t.call('api_review', token, '2026-10-11', schools[0].id, 'return', 'أكمل البيانات');
+    t.at('2026-10-14T08:00');
+    const d = t.day();
+    assert.deepEqual(d.returnedOther.map((x) => [x.date, x.schoolId, x.schoolName]), [['2026-10-11', schools[0].id, SCHOOLS[0].name]]);
+    assert.ok(!d.pendingOther.some((x) => x.schoolId === schools[0].id));
+    assert.ok(d.pendingOther.some((x) => x.schoolId === schools[1].id));
+  });
+  it('the day says whether a school without a report can still send it (today, late window, closed)', () => {
+    const t = sys({ clock: '2026-10-11T07:00' });
+    const { token } = t.ready();
+    t.at('2026-10-14T10:00');
+    let d = t.day();
+    assert.deepEqual([d.today, d.canSubmit, d.allowLate], ['2026-10-14', true, true]);
+    assert.equal(t.day('2026-10-13').canSubmit, true);
+    assert.equal(t.day('2026-10-12').canSubmit, true);
+    assert.equal(t.day('2026-10-11').canSubmit, false, 'outside the 2-workday window');
+    t.call('api_saveSettings', token, { schedule: { allowLate: false, backfillDays: 0 } });
+    d = t.day();
+    assert.deepEqual([d.canSubmit, d.allowLate], [false, false]);
+    assert.equal(t.day('2026-10-13').canSubmit, false);
+    assert.equal(t.day('2026-10-13').today, '2026-10-14', 'a past day carries the server\'s today (rollover)');
+  });
+  it('deleting and re-adding attendance / lessons questions keeps past metrics; mirror columns are reused', () => {
+    const t = sys({ clock: '2026-10-11T07:00' });
+    const { token, schools } = t.ready();
+    t.at('2026-10-12T07:30');
+    t.submit(schools[0], { att: { students: { present: 90, absent: 10 } }, planned: 40, done: 36 });
+    t.at('2026-10-13T07:30');
+    const f0 = t.fieldsNow();
+    t.call('api_saveFields', token, f0.filter((f) => f.type !== 'attendance' && f.kpi !== 'lessons_planned'));
+    t.at('2026-10-14T07:30');
+    const f1 = t.fieldsNow();
+    const att = { label: 'الحضور والغياب', type: 'attendance', required: true, rows: ['students', 'teachers', 'staff'] };
+    const planned = { label: 'الحصص المخطط لها', type: 'number', required: true, kpi: 'lessons_planned', min: 0 };
+    const saved = t.call('api_saveFields', token, [f1[0], att, planned].concat(f1.slice(1))).fields;
+    assert.ok(!saved.some((f) => f.id === 'f_atten1' || f.id === 'f_lplan1'), 'new ids');
+    t.fields = saved;
+    const rep = t.row(t.day('2026-10-12'), schools[0].id).report;
+    assert.equal(rep.derived.attendance.students.absencePct, 10);
+    assert.equal(rep.derived.lessons.activationPct, 90);
+    const r = t.call('api_range', token, '2026-10-12', '2026-10-12');
+    assert.equal(r.days[0].studentAbsencePct, 10);
+    assert.equal(r.days[0].activationPct, 90);
+    t.submit(schools[1], { att: { students: { present: 50, absent: 50 } }, planned: 10, done: 5 });
+    const today = t.row(t.day(), schools[1].id).report.derived;
+    assert.equal(today.attendance.students.absencePct, 50);
+    assert.equal(today.lessons.activationPct, 50);
+    const hdr = headerRow(t);
+    assert.equal(hdr.filter((h) => h === 'الطلاب - الحاضرون').length, 1, 're-added questions write under their old columns');
+    assert.equal(hdr.filter((h) => h === 'الحصص المخطط لها').length, 1);
+  });
+});
+
+describe('bulk paste from Excel', () => {
+  it('a serial «م» column or a ministry-number column is skipped, not taken as the school name', () => {
+    const t = sys();
+    const text = 'م\tاسم المدرسة\tالمدير\tالجوال\n' + Array.from({ length: 12 }, (_, i) =>
+      (i + 1) + '\tمدرسة رقم ' + (i + 1) + '\tأ. مدير ' + (i + 1) + '\t05000000' + String(i + 1).padStart(2, '0')).join('\n');
+    const parse = (x) => JSON.parse(JSON.stringify(t.app.invoke('parseBulkSchools_', x, [])));   // plain objects of this realm
+    const r = parse(text);
+    assert.equal(r.items.length, 12);
+    assert.deepEqual([r.items[0].name, r.items[0].principal, r.items[0].phone], ['مدرسة رقم 1', 'أ. مدير 1', '0500000001']);
+    assert.deepEqual(r.items.map((x) => x.name).slice(9), ['مدرسة رقم 10', 'مدرسة رقم 11', 'مدرسة رقم 12']);
+    assert.deepEqual(r.skipped, [{ line: 1, reason: 'سطر عناوين' }]);
+    const m = parse('1234567\tمدرسة النور\tأ. خالد\n٧٦٥٤٣٢١,متوسطة الفجر');
+    assert.deepEqual(m.items.map((x) => [x.name, x.principal]), [['مدرسة النور', 'أ. خالد'], ['متوسطة الفجر', '']]);
+    const plain = parse('1- مدرسة الأمل\n2) مدرسة الهدى، أ. سعد');
+    assert.deepEqual(plain.items.map((x) => x.name), ['مدرسة الأمل', 'مدرسة الهدى']);
+  });
+});
+
+describe('dailyDigest hardening', () => {
+  it('an anonymous google.script.run call sends nothing and never suppresses the real trigger run', () => {
+    const t = sys();
+    const { token } = t.ready();
+    t.call('api_saveSettings', token, { digest: { enabled: true, time: '10:00' } });
+    t.at('2026-10-14T06:05');
+    const n = t.env.mailbox.length;
+    t.call('dailyDigest');
+    t.call('dailyDigest', { triggerUid: '123' });
+    assert.equal(t.env.mailbox.length, n, 'no mail from an anonymous / forged call');
+    t.at('2026-10-14T10:00');
+    t.app.runTrigger('dailyDigest');
+    assert.equal(t.env.mailbox.length, n + 1, 'the real run still sends');
+    t.app.runTrigger('dailyDigest');
+    assert.equal(t.env.mailbox.length, n + 1, 'once per day');
+  });
+  it('a digest that fires before the deadline (nearMinute ±15) says so', () => {
+    const t = sys();
+    const { token } = t.ready();
+    t.call('api_saveSettings', token, { digest: { enabled: true, time: '09:05' } });
+    t.at('2026-10-14T08:52');
+    t.app.runTrigger('dailyDigest');
+    const m = t.env.mailbox[t.env.mailbox.length - 1];
+    assert.match(m.htmlBody, /لم يحن بعد/);
+    assert.match(m.body, /قبل الموعد النهائي/);
+  });
+});
+
+/* ================================================================== 22. Part B */
+describe('single-file bundle (NABD_EMBEDDED_FILES_)', () => {
+  it('doGet renders identically from embedded HTML when no .html files exist', () => {
+    const files = {};
+    for (const n of ['Admin', 'School', 'Styles', 'Common']) files[n] = fs.readFileSync(path.join(SRC, n + '.html'), 'utf8');
+    const bundled = fs.readFileSync(path.join(SRC, 'Code.gs'), 'utf8') + '\nvar NABD_EMBEDDED_FILES_ = ' + JSON.stringify(files) + ';\n';
+    const make = (embedded) => {
+      const env = GasMock.createGasEnv({ ownerEmail: OWNER, scriptUrl: BASE_URL, clock: '2026-10-14T07:30', seed: 7 });
+      const app = loadApp({ srcDir: SRC, env, code: embedded ? bundled : undefined });
+      if (embedded) env.setFiles(() => null);   // nothing on "disk": every page must come from the bundle
+      return app;
+    };
+    const plain = make(false), bundle = make(true);
+    for (const params of [{}, { f: 'all' }, { s: '__preview' }]) {
+      const a = plain.doGetOutput(params), b = bundle.doGetOutput(params);
+      assert.equal(b.html, a.html, JSON.stringify(params));
+      assert.equal(b.title, a.title);
+      assert.ok(!b.html.includes('<?') && b.html.includes('window.BOOT'), 'scriptlets were evaluated');
+    }
+    assert.match(bundle.call('include', 'Styles'), /<style/);
+  });
+});
+
+describe('spreadsheet resolution (bound, stored id, standalone)', () => {
+  it('a standalone install with nothing stored creates «نبض المدارس — البيانات» once and keeps using it', () => {
+    const t = sys();
+    t.env.activeSpreadsheetAvailable = false;
+    const before = t.env.spreadsheet.getId();
+    assert.equal(t.boot({}).status.setupDone, false);
+    const id = t.env.spreadsheet.getId();
+    assert.notEqual(id, before);
+    assert.equal(t.env.spreadsheet.getName(), 'نبض المدارس — البيانات');
+    assert.equal(t.cfg().ssId, id);
+    for (const n of [SH.schools, SH.reports, SH.log]) assert.ok(t.env.inspect.sheetNames().includes(n), n);
+    const { schools } = t.ready();
+    assert.equal(t.env.spreadsheet.getId(), id, 'no second spreadsheet');
+    assert.equal(t.sheet(SH.schools).values.length, 4);
+    assert.equal(t.form(schools[0]).ok, true);
+  });
+  it('a copied standalone script (properties came along, another owner) starts fresh instead of using the original data', () => {
+    const t = sys();
+    t.env.activeSpreadsheetAvailable = false;
+    t.ready();
+    const oldId = t.cfg().ssId;
+    t.env.setOwnerEmail('other.supervisor@gmail.com');
+    const boot = t.boot({});
+    assert.equal(boot.status.setupDone, false);
+    assert.equal(boot.status.ownerEmailMasked, 'ot••••••@gmail.com');
+    assert.notEqual(t.cfg().ssId, oldId);
+    assert.equal(t.cfg().ownerEmail, 'other.supervisor@gmail.com');
+    assert.equal(t.sheet(SH.schools).values.length, 1, 'the new data file has no schools');
+  });
+  it('a bound spreadsheet is never reset by an editor using the menu', () => {
+    const t = sys();
+    t.ready();
+    t.env.setOwnerEmail('editor@gmail.com');
+    t.app.runMenu('menuShowLink');
+    t.env.setOwnerEmail(OWNER);
+    assert.equal(t.boot({}).status.setupDone, true);
+  });
+});
+
+describe('late reports for missed days (schedule.backfillDays)', () => {
+  it('a school can send a missed workday inside the window; it is marked late and shows on that day', () => {
+    const t = sys({ clock: '2026-10-11T07:00' });
+    const { token, schools } = t.ready();
+    const [A, B] = schools;
+    t.at('2026-10-12T08:00');
+    t.submit(B);
+    t.at('2026-10-14T08:00');
+    assert.deepEqual(t.form(A).missingDays, ['2026-10-13', '2026-10-12']);
+    assert.deepEqual(t.form(B).missingDays, ['2026-10-13']);
+    const f = t.form(A, '2026-10-13');
+    assert.deepEqual([f.ok, f.state, f.date, f.existing, f.canEdit], [true, 'backfill', '2026-10-13', null, true]);
+    const r = t.submit(A, { date: '2026-10-13' });
+    assert.deepEqual([r.receipt.date, r.receipt.late], ['2026-10-13', true]);
+    assert.deepEqual(t.form(A).missingDays, ['2026-10-12']);
+    expectError(() => t.submit(A, { date: '2026-10-13' }), /لا يمكن فتح تقرير هذا اليوم/, 'no edits of a past report');
+    expectError(() => t.submit(A, { date: '2026-10-11' }), /لا يمكن فتح تقرير هذا اليوم/, 'outside the window');
+    assert.equal(t.form(A, '2026-10-11').code, 'NOT_EDITABLE');
+    expectError(() => t.submit(A, { date: '2026-10-15' }), /لا يمكن فتح تقرير هذا اليوم/, 'future');
+    const d = t.day('2026-10-13');
+    assert.ok(t.row(d, A.id).report.late);
+    assert.ok(t.row(d, A.id).flags.includes('late'));
+    assert.equal(t.day().rows.find((x) => x.school.id === A.id).report, null, 'today is untouched');
+  });
+  it('the window skips off days, respects 0 (off) and the day a school was added', () => {
+    const t = sys({ clock: '2026-10-11T07:00' });
+    const { token, schools } = t.ready();
+    t.call('api_saveSettings', token, { holidays: ['2026-10-13'] });
+    t.at('2026-10-14T08:00');
+    assert.deepEqual(t.form(schools[0]).missingDays, ['2026-10-12', '2026-10-11']);
+    t.at('2026-10-18T08:00');
+    assert.deepEqual(t.form(schools[0]).missingDays, ['2026-10-15', '2026-10-14'], 'Friday/Saturday skipped');
+    t.call('api_saveSettings', token, { schedule: { backfillDays: 0 } });
+    assert.deepEqual(t.form(schools[0]).missingDays, []);
+    expectError(() => t.submit(schools[0], { date: '2026-10-15' }), /لا يمكن فتح تقرير هذا اليوم/);
+    t.call('api_saveSettings', token, { schedule: { backfillDays: 7 } });
+    const fresh = t.call('api_saveSchool', token, { name: 'مدرسة جديدة' }).school;
+    assert.deepEqual(t.form(fresh).missingDays, [], 'nothing is owed before a school was added');
+    expectError(() => t.call('api_saveSettings', token, { schedule: { backfillDays: 8 } }), /من 0 إلى 7/);
+    expectError(() => t.call('api_saveSettings', token, { schedule: { backfillDays: -1 } }), /من 0 إلى 7/);
+    assert.equal(t.call('api_getSettings', token).schedule.backfillDays, 7);
+  });
+  it('a deleted past report can be sent again inside the window', () => {
+    const t = sys({ clock: '2026-10-13T08:00' });
+    const { token, schools } = t.ready();
+    t.submit(schools[0]);
+    t.at('2026-10-14T08:00');
+    t.call('api_deleteReport', token, '2026-10-13', schools[0].id);
+    assert.ok(t.form(schools[0]).missingDays.includes('2026-10-13'));
+    assert.equal(t.submit(schools[0], { date: '2026-10-13' }).receipt.late, true);
+  });
+  it('doGet ?s=…&d=… opens that day when allowed, otherwise today', () => {
+    const t = sys({ clock: '2026-10-11T07:00' });
+    const { schools } = t.ready();
+    t.at('2026-10-14T08:00');
+    assert.equal(t.boot({ s: schools[0].token, d: '2026-10-13' }).form.state, 'backfill');
+    const f = t.boot({ s: schools[0].token, d: '2026-10-01' }).form;
+    assert.deepEqual([f.ok, f.date, f.state], [true, '2026-10-14', 'open']);
+  });
+});
+
+describe('phone numbers are stored as digits only', () => {
+  it('no apostrophe-prefixed phone in the sheet; legacy "+" rows read back as digits', () => {
+    const t = sys();
+    const { token } = t.ready();
+    const s = t.call('api_saveSchool', token, { name: 'مدرسة دولية', phone: '+966 55 111 2233' }).school;
+    assert.equal(s.phone, '966551112233');
+    const sc = t.sheet(SH.schools);
+    const row = sc.values.find((r) => r[0] === s.id);
+    assert.equal(row[5], '966551112233');
+    assert.ok(t.env.inspect.allCells().every((c) => !/^'/.test(String(c.value))), 'no apostrophe-prefixed cell');
+    const sh = t.env.spreadsheet.getSheetByName(SH.schools);
+    sh.getRange(sc.values.indexOf(row) + 1, 6).setValue("'+966551112244");
+    assert.equal(t.call('api_schools', token).schools.find((x) => x.id === s.id).phone, '966551112244');
+    const bulk = t.call('api_bulkAddSchools', token, 'مدرسة الواحة، أ. سالم، +966 50 000 0001');
+    assert.equal(bulk.added, 1);
+    assert.equal(t.call('api_schools', token).schools.find((x) => x.name === 'مدرسة الواحة').phone, '966500000001');
+    t.call('api_saveSettings', token, { supervisor: { phone: '+966 50 999 0000' } });
+    assert.equal(t.call('api_getSettings', token).supervisor.phone, '966509990000');
   });
 });
